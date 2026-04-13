@@ -10,6 +10,7 @@ venv/
 env/
 ENV/
 .python-version
+.env
 
 # Python 工具缓存
 .pytest_cache/
@@ -21,6 +22,7 @@ htmlcov/
 # Notebook 与日志
 .ipynb_checkpoints/
 *.log
+
 
 # 操作系统文件
 Thumbs.db

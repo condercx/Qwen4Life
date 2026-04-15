@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 
 
@@ -14,7 +14,6 @@ class AgentPlan:
 	intent: str
 	reply_hint: str | None = None
 	action: dict[str, Any] | None = None
-	options: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(slots=True)

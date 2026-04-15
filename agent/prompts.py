@@ -20,41 +20,36 @@ def build_system_prompt() -> str:
   "intent": "对用户意图的简短概括",
   "reply_hint": "给用户的简短说明，可为空字符串",
   "action": {
-    "mode": "discrete 或 continuous",
     "device": "设备类型",
     "target": "设备实例 ID",
     "command": "动作名",
     "params": {}
-  },
-  "options": {
-    "advance_ticks": 0
   }
 }
 
 当 plan_type 为 state_query 时：
 - action 必须为 null
-- options 允许为空对象
 
 当前设备与实例：
 - 灯光：living_room_light_1
 - 空调：living_room_ac_1
-- 扫地机器人：robot_vacuum_1
+- 洗衣机：washing_machine_1
 
 当前支持动作：
-- 灯光 discrete: turn_on, turn_off
-- 灯光 continuous: set_brightness，参数 brightness 0-100
-- 空调 discrete: turn_on, turn_off, set_mode，参数 mode 可选 cool/heat/fan/dry
-- 空调 continuous: set_temperature，参数 temperature 16-30
-- 空调 continuous: set_fan_speed，参数 fan_speed 0.1-5.0
-- 扫地机器人 discrete: start_cleaning, stop, dock
-- 扫地机器人 continuous: move_to，参数 x, y, speed
+- 灯光: turn_on, turn_off, set_brightness，参数 brightness 0-100
+- 空调: turn_on, turn_off, set_mode，参数 mode 可选 cool/heat/fan/dry
+- 空调: set_temperature，参数 temperature 16-30
+- 空调: set_fan_speed，参数 fan_speed 0.1-5.0
+- 洗衣机: start_wash，参数 program 可选 standard/quick，duration_seconds 可选，默认 1800 秒
+- 洗衣机: pause, resume, cancel
 
 默认规则：
-- 如果用户只是问当前状态、设备状态、机器人在哪里，使用 state_query。
+- 如果用户只是问当前状态、设备状态、洗衣机还剩多久、衣服洗完了吗，使用 state_query。
 - 如果用户明确要控制设备，使用 environment_action。
 - 如果用户说“打开客厅灯”，target 应该是 living_room_light_1。
 - 如果用户说“把空调调到24度”，target 应该是 living_room_ac_1，command 应该是 set_temperature。
-- 如果用户说“让扫地机器人去门口”，target 应该是 robot_vacuum_1，command 应该是 move_to。
+- 如果用户说“开始洗衣服”，target 应该是 washing_machine_1，command 应该是 start_wash。
+- 如果用户没有说明洗衣时长，默认 duration_seconds=1800。
 """.strip()
 
 

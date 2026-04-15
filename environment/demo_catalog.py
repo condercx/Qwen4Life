@@ -5,14 +5,14 @@ from __future__ import annotations
 from typing import Callable
 
 from environment.scenarios import (
-	build_continuous_demo_requests,
 	build_discrete_demo_requests,
 	build_mixed_demo_requests,
+	build_timed_demo_requests,
 )
 
 DEMO_BUILDERS: dict[str, tuple[str, str, Callable[[str], list[dict]]]] = {
 	"discrete": ("离散控制示例", "demo-discrete-session", build_discrete_demo_requests),
-	"continuous": ("连续控制示例", "demo-continuous-session", build_continuous_demo_requests),
+	"timed": ("计时任务示例", "demo-timed-session", build_timed_demo_requests),
 	"mixed": ("混合联动示例", "demo-mixed-session", build_mixed_demo_requests),
 }
 

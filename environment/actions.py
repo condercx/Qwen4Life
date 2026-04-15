@@ -13,14 +13,11 @@ ERROR_SESSION_NOT_FOUND = 1005
 ERROR_DEVICE_NOT_FOUND = 1006
 ERROR_INVALID_REQUEST = 1007
 
-SUPPORTED_MODES = {"discrete", "continuous"}
-
 
 @dataclass(slots=True)
 class Action:
-	"""统一动作描述，兼容离散与连续控制。"""
+	"""统一动作描述。"""
 
-	mode: str
 	device: str
 	target: str
 	command: str
@@ -35,7 +32,6 @@ class StepRequest:
 	session_id: str
 	intent: str | None
 	action: Action
-	options: dict[str, Any] = field(default_factory=dict)
 	timestamp: str | None = None
 
 
@@ -61,12 +57,7 @@ def parse_step_request(payload: dict[str, Any]) -> StepRequest:
 	if not isinstance(action_payload, dict):
 		raise ProtocolError(ERROR_INVALID_REQUEST, "action 字段缺失或格式错误")
 
-	mode = _require_string(action_payload, "mode")
-	if mode not in SUPPORTED_MODES:
-		raise ProtocolError(ERROR_INVALID_REQUEST, f"不支持的 mode: {mode}")
-
 	action = Action(
-		mode=mode,
 		device=_require_string(action_payload, "device"),
 		target=_require_string(action_payload, "target"),
 		command=_require_string(action_payload, "command"),
@@ -78,7 +69,6 @@ def parse_step_request(payload: dict[str, Any]) -> StepRequest:
 		session_id=session_id,
 		intent=payload.get("intent"),
 		action=action,
-		options=_optional_dict(payload.get("options")),
 		timestamp=payload.get("timestamp"),
 	)
 
@@ -143,5 +133,5 @@ def _optional_dict(value: Any) -> dict[str, Any]:
 	if value is None:
 		return {}
 	if not isinstance(value, dict):
-		raise ProtocolError(ERROR_INVALID_REQUEST, "params/options 必须是字典")
+		raise ProtocolError(ERROR_INVALID_REQUEST, "params 必须是字典")
 	return value

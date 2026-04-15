@@ -61,7 +61,6 @@ class SimpleSmartHomeAgent:
 			session_id=session_id,
 			intent=plan.intent,
 			action=plan.action or {},
-			options=plan.options,
 		)
 		state = self.adapter.fetch_state(session_id)
 		events = self.adapter.fetch_events(session_id)
@@ -86,16 +85,12 @@ class SimpleSmartHomeAgent:
 	def _build_state_reply(self, plan: AgentPlan, state: dict, events: list[dict]) -> str:
 		"""生成状态查询类回复。"""
 
-		light = state["devices"]["living_room_light_1"]
-		ac = state["devices"]["living_room_ac_1"]
-		robot = state["devices"]["robot_vacuum_1"]
 		prefix = plan.reply_hint or "当前环境状态如下。"
-		return (
-			f"{prefix} "
-			f"灯光{'开启' if light['is_on'] else '关闭'}，亮度 {light['brightness']}；"
-			f"空调{'开启' if ac['is_on'] else '关闭'}，模式 {ac['mode']}，目标温度 {ac['target_temperature']}；"
-			f"机器人状态 {robot['status']}，位置 ({robot['position']['x']:.2f}, {robot['position']['y']:.2f})。"
-		)
+		descriptions = [self._describe_device(device) for device in state["devices"].values()]
+		event_summary = ""
+		if events:
+			event_summary = " 刚发生的事件有：" + "，".join(self._describe_event_type(event["type"]) for event in events) + "。"
+		return f"{prefix} {'；'.join(descriptions)}。{event_summary}".strip()
 
 	def _build_action_reply(self, plan: AgentPlan, environment_response: dict, events: list[dict]) -> str:
 		"""生成动作执行类回复。"""
@@ -106,3 +101,51 @@ class SimpleSmartHomeAgent:
 			return f"{prefix} 当前产生的事件有：{event_types}。"
 		error = environment_response["error"]
 		return f"动作执行失败，错误码 {error['code']}，原因：{error['message']}。"
+
+	def _describe_device(self, device: dict) -> str:
+		device_type = device["device_type"]
+		if device_type == "light":
+			return f"灯光{'开启' if device['is_on'] else '关闭'}，亮度 {device['brightness']}"
+		if device_type == "ac":
+			return (
+				f"空调{'开启' if device['is_on'] else '关闭'}，模式 {device['mode']}，"
+				f"目标温度 {device['target_temperature']} 度"
+			)
+		if device_type == "washing_machine":
+			status = device["status"]
+			if status == "running":
+				return (
+					f"洗衣机正在运行，程序 {device['program']}，"
+					f"剩余 {self._format_duration(device['remaining_seconds'])}"
+				)
+			if status == "paused":
+				return f"洗衣机已暂停，剩余 {self._format_duration(device['remaining_seconds'])}"
+			if status == "completed":
+				return "洗衣机已完成本轮洗衣"
+			if status == "cancelled":
+				return "洗衣机任务已取消"
+			return "洗衣机当前空闲"
+		return f"设备 {device['name']} 状态未知"
+
+	def _describe_event_type(self, event_type: str) -> str:
+		mapping = {
+			"session_reset": "会话已重置",
+			"light_state_changed": "灯光状态更新",
+			"light_brightness_changed": "灯光亮度更新",
+			"ac_state_changed": "空调状态更新",
+			"ac_setting_changed": "空调参数更新",
+			"washing_started": "洗衣已启动",
+			"washing_paused": "洗衣已暂停",
+			"washing_resumed": "洗衣已继续",
+			"washing_completed": "洗衣已完成",
+			"washing_cancelled": "洗衣已取消",
+		}
+		return mapping.get(event_type, event_type)
+
+	def _format_duration(self, seconds: int) -> str:
+		if seconds < 60:
+			return f"{seconds} 秒"
+		minutes, remain = divmod(seconds, 60)
+		if remain == 0:
+			return f"{minutes} 分钟"
+		return f"{minutes} 分 {remain} 秒"

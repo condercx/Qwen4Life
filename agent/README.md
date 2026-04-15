@@ -2,7 +2,7 @@
 
 这个目录提供一个最小可运行的上层 agent，用于通过硅基流动在线模型把用户自然语言转换成环境动作，然后调用 environment 中的 adapter 执行。
 
-当前第一版默认使用硅基流动在线接口，但代码结构已经按“可替换模型后端”组织，后续新增本地模型时，优先在 `llm_client.py` 中增加新的本地实现类，而不是修改控制器主流程。
+当前版本的主场景已经切换为“即时控制 + 计时任务”。也就是说，agent 不再规划机器人路径或时间推进参数，而是直接处理像“打开客厅灯”“把空调调到 24 度”“开始洗衣服”“洗衣机还剩多久”这类更接近真实家庭交互的请求。
 
 ## 目录结构
 
@@ -25,6 +25,14 @@
 5. `controller.py` 调用 `environment/agent_adapter.py`。
 6. environment 返回状态与事件。
 7. agent 生成最终回复。
+
+## 当前支持的设备语义
+
+- 灯光：打开、关闭、调亮度。
+- 空调：开关、设模式、调温度、调风速。
+- 洗衣机：开始洗衣、暂停、继续、取消、查询剩余时间、查询是否完成。
+
+洗衣机在未指定时长时默认按 30 分钟处理。环境会在每次 `step/get_state/get_events` 前自动同步真实时间，因此用户下一次提问时就能自然看到最新进度。
 
 ## 配置
 
@@ -78,39 +86,12 @@ $env:HTTPS_PROXY = "http://proxy-shz.intel.com:912"
 $env:ALL_PROXY = "http://proxy-shz.intel.com:912"
 ```
 
-注意这里使用的是 `http://` 代理地址，即使目标接口本身是 HTTPS，请求也会通过 HTTP CONNECT 代理转发。
-
-设置完成后，直接在同一个 PowerShell 会话里运行：
-
-```powershell
-python -m agent.demo "打开客厅灯"
-```
-
-如果只想验证链路是否打通，也可以先执行：
-
-```powershell
-Invoke-WebRequest `
-	-Uri "https://api.siliconflow.cn/v1/chat/completions" `
-	-Method POST `
-	-ContentType "application/json" `
-	-Body '{"model":"test","messages":[{"role":"user","content":"hi"}]}' `
-	-TimeoutSec 30
-```
-
-如果不再需要这组代理变量，可以在当前 PowerShell 会话中清理：
-
-```powershell
-Remove-Item Env:HTTP_PROXY -ErrorAction SilentlyContinue
-Remove-Item Env:HTTPS_PROXY -ErrorAction SilentlyContinue
-Remove-Item Env:ALL_PROXY -ErrorAction SilentlyContinue
-```
-
 ## 运行方式
 
 单轮调用：
 
 ```bash
-python -m agent.demo "打开客厅灯"
+python -m agent.demo "开始洗衣服"
 ```
 
 交互模式：
@@ -122,7 +103,7 @@ python -m agent.demo
 指定会话：
 
 ```bash
-python -m agent.demo --session-id my-session "把空调调到24度"
+python -m agent.demo --session-id my-session "洗衣机还剩多久"
 ```
 
 ## 当前限制

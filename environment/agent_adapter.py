@@ -26,7 +26,6 @@ class AgentEnvironmentAdapter:
 		session_id: str,
 		action: dict[str, Any],
 		intent: str | None = None,
-		options: dict[str, Any] | None = None,
 		request_id: str | None = None,
 	) -> dict[str, Any]:
 		"""使用语义动作直接驱动环境。"""
@@ -35,7 +34,6 @@ class AgentEnvironmentAdapter:
 			session_id=session_id,
 			action=action,
 			intent=intent,
-			options=options,
 			request_id=request_id,
 		)
 		return self.environment.step(request)
@@ -66,7 +64,6 @@ class AgentEnvironmentAdapter:
 		session_id: str,
 		action: dict[str, Any],
 		intent: str | None = None,
-		options: dict[str, Any] | None = None,
 		request_id: str | None = None,
 	) -> dict[str, Any]:
 		"""构造标准 step 请求体，作为本地调用与协议传输的统一格式。"""
@@ -76,7 +73,6 @@ class AgentEnvironmentAdapter:
 			"session_id": session_id,
 			"intent": intent,
 			"action": action,
-			"options": options or {},
 		}
 
 	def _next_request_id(self, session_id: str) -> str:

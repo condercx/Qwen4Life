@@ -62,7 +62,7 @@ def print_title(title: str) -> None:
 def print_observation_summary(label: str, session_id: str, observation: dict) -> None:
 	"""打印环境状态摘要，避免终端被 JSON 淹没。"""
 
-	print(f"[{label}] session={session_id} | sim_time={observation['sim_time']}")
+	print(f"[{label}] session={session_id} | observed_at={observation['observed_at']}")
 	for device in observation["devices"].values():
 		print("  - " + describe_device(device))
 
@@ -72,15 +72,12 @@ def print_step_summary(request: dict, response: dict) -> None:
 
 	action = request["action"]
 	print(f"[请求] {request['request_id']} | 意图: {request.get('intent') or '无'}")
-	print(
-		"  动作: "
-		f"{action['mode']} | {action['target']} -> {action['command']} | params={action['params']}"
-	)
+	print(f"  动作: {action['target']} -> {action['command']} | params={action['params']}")
 	if response["success"]:
 		metrics = response.get("metrics", {})
 		print(
 			"  结果: 成功"
-			f" | sim_time={response['observation']['sim_time']}"
+			f" | observed_at={response['observation']['observed_at']}"
 			f" | 新事件={len(response['events'])}"
 			f" | 未读事件={metrics.get('unread_event_count', 0)}"
 		)
@@ -106,6 +103,12 @@ def print_events_summary(events: list[dict]) -> None:
 		print("  - " + describe_event(event))
 
 
+def print_wait_summary(label: str, seconds: float) -> None:
+	"""打印等待后台计时的摘要。"""
+
+	print(f"[等待] {label} | {seconds:.1f}s")
+
+
 def describe_device(device: dict) -> str:
 	"""将设备状态格式化为简洁中文描述。"""
 
@@ -119,12 +122,11 @@ def describe_device(device: dict) -> str:
 			f"空调 {device['name']}: {state}，模式={device['mode']}，"
 			f"目标温度={device['target_temperature']}，风速={device['fan_speed']}"
 		)
-	if device_type == "robot_vacuum":
-		position = format_position(device["position"])
-		target = "无" if device["target"] is None else format_position(device["target"])
+	if device_type == "washing_machine":
+		remaining = format_duration(device["remaining_seconds"])
 		return (
-			f"扫地机器人 {device['name']}: 状态={device['status']}，"
-			f"位置={position}，目标={target}，速度={device['current_speed']}"
+			f"洗衣机 {device['name']}: 状态={device['status']}，程序={device['program']}，"
+			f"剩余时间={remaining}"
 		)
 	return f"设备 {device['name']}: {json.dumps(device, ensure_ascii=False)}"
 
@@ -135,45 +137,40 @@ def describe_event(event: dict) -> str:
 	payload = event["payload"]
 	event_type = event["type"]
 	if event_type == "session_reset":
-		return f"t={event['sim_time']} 会话已重置"
+		return f"t={event['occurred_at']} 会话已重置"
 	if event_type in {"light_state_changed", "light_brightness_changed"}:
 		state = "开" if payload["is_on"] else "关"
-		return f"t={event['sim_time']} 灯光状态更新: {state}，亮度={payload['brightness']}"
+		return f"t={event['occurred_at']} 灯光状态更新: {state}，亮度={payload['brightness']}"
 	if event_type == "ac_state_changed":
 		state = "开" if payload["is_on"] else "关"
-		return f"t={event['sim_time']} 空调状态更新: {state}，模式={payload['mode']}"
+		return f"t={event['occurred_at']} 空调状态更新: {state}，模式={payload['mode']}"
 	if event_type == "ac_setting_changed":
 		return (
-			f"t={event['sim_time']} 空调参数更新: 模式={payload['mode']}，"
+			f"t={event['occurred_at']} 空调参数更新: 模式={payload['mode']}，"
 			f"温度={payload['target_temperature']}，风速={payload['fan_speed']}"
 		)
-	if event_type == "robot_target_updated":
+	if event_type == "washing_started":
 		return (
-			f"t={event['sim_time']} 机器人收到新目标: "
-			f"({format_number(payload['target_x'])}, {format_number(payload['target_y'])})，"
-			f"速度={payload['speed']}"
+			f"t={event['occurred_at']} 洗衣已启动: 程序={payload['program']}，"
+			f"预计结束={payload['expected_finish_at']}"
 		)
-	if event_type == "robot_position_updated":
-		return (
-			f"t={event['sim_time']} 机器人位置更新: "
-			f"({format_number(payload['x'])}, {format_number(payload['y'])})，状态={payload['status']}"
-		)
-	if event_type == "robot_arrived":
-		return f"t={event['sim_time']} 机器人到达目标点: ({format_number(payload['x'])}, {format_number(payload['y'])})"
-	if event_type in {"robot_boundary_blocked", "robot_obstacle_detected"}:
-		return f"t={event['sim_time']} 机器人运动受阻: ({format_number(payload['x'])}, {format_number(payload['y'])})"
-	if event_type == "robot_state_changed":
-		return f"t={event['sim_time']} 机器人状态更新: {payload['status']}"
-	return f"t={event['sim_time']} {event_type}: {json.dumps(payload, ensure_ascii=False)}"
+	if event_type == "washing_paused":
+		return f"t={event['occurred_at']} 洗衣已暂停: 剩余时间={format_duration(payload['remaining_seconds'])}"
+	if event_type == "washing_resumed":
+		return f"t={event['occurred_at']} 洗衣已继续: 剩余时间={format_duration(payload['remaining_seconds'])}"
+	if event_type == "washing_completed":
+		return f"t={event['occurred_at']} 洗衣已完成: 程序={payload['program']}"
+	if event_type == "washing_cancelled":
+		return f"t={event['occurred_at']} 洗衣任务已取消: 程序={payload['program']}"
+	return f"t={event['occurred_at']} {event_type}: {json.dumps(payload, ensure_ascii=False)}"
+def format_duration(seconds: int) -> str:
+	"""将剩余时间格式化为便于阅读的中文。"""
 
-
-def format_position(position: dict) -> str:
-	"""格式化坐标输出。"""
-
-	return f"({format_number(position['x'])}, {format_number(position['y'])})"
-
-
-def format_number(value: float) -> str:
-	"""避免浮点数在终端输出过长。"""
-
-	return f"{value:.2f}"
+	if seconds <= 0:
+		return "0 秒"
+	if seconds < 60:
+		return f"{seconds} 秒"
+	minutes, remain = divmod(seconds, 60)
+	if remain == 0:
+		return f"{minutes} 分钟"
+	return f"{minutes} 分 {remain} 秒"

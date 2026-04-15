@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from pathlib import Path
 
 from environment.demo_catalog import DEMO_BUILDERS, get_demo_names
@@ -14,6 +15,7 @@ from environment.demo_output import (
 	print_runtime_overview,
 	print_step_summary,
 	print_title,
+	print_wait_summary,
 )
 from environment.smart_home_env import SmartHomeEnv
 
@@ -42,10 +44,26 @@ def run_single_demo(env: SmartHomeEnv, demo_name: str, log_path: Path) -> None:
 	append_log(log_path, demo_name, "reset", reset_state)
 	print_observation_summary("初始化状态", session_id, reset_state)
 
-	for request in builder(session_id):
-		response = env.step(request)
-		append_log(log_path, demo_name, "step", {"request": request, "response": response})
-		print_step_summary(request, response)
+	for step in builder(session_id):
+		kind = step.get("kind", "request")
+		if kind == "wait":
+			seconds = float(step["seconds"])
+			print_wait_summary(step.get("label", "等待后台任务推进"), seconds)
+			time.sleep(seconds)
+			append_log(log_path, demo_name, "wait", step)
+			continue
+		if kind == "poll":
+			state = env.get_state(session_id)
+			events = env.get_events(session_id)
+			payload = {"label": step.get("label", "状态轮询"), "state": state, "events": events}
+			append_log(log_path, demo_name, "poll", payload)
+			print_observation_summary(step.get("label", "状态轮询"), session_id, state)
+			print_events_summary(events)
+			continue
+
+		response = env.step(step)
+		append_log(log_path, demo_name, "step", {"request": step, "response": response})
+		print_step_summary(step, response)
 
 	state = env.get_state(session_id)
 	append_log(log_path, demo_name, "state", state)

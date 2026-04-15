@@ -2,19 +2,7 @@
 
 from __future__ import annotations
 
-from environment.devices import AirConditioner, Light, RobotVacuum, Room
-
-
-def build_default_room() -> Room:
-	"""构造一个带障碍区的客厅场景。"""
-
-	return Room(
-		room_id="living_room",
-		name="客厅",
-		width=10.0,
-		height=8.0,
-		blocked_zones=[{"x1": 4.0, "y1": 2.0, "x2": 5.5, "y2": 5.5}],
-	)
+from environment.devices import AirConditioner, Light, WashingMachine
 
 
 def build_default_devices() -> dict[str, object]:
@@ -30,18 +18,16 @@ def build_default_devices() -> dict[str, object]:
 		device_type="ac",
 		name="客厅空调",
 	)
-	robot = RobotVacuum(
-		device_id="robot_vacuum_1",
-		device_type="robot_vacuum",
-		name="扫地机器人",
-		position_x=0.5,
-		position_y=0.5,
+	washing_machine = WashingMachine(
+		device_id="washing_machine_1",
+		device_type="washing_machine",
+		name="阳台洗衣机",
 	)
-	return {light.device_id: light, ac.device_id: ac, robot.device_id: robot}
+	return {light.device_id: light, ac.device_id: ac, washing_machine.device_id: washing_machine}
 
 
 def build_discrete_demo_requests(session_id: str) -> list[dict]:
-	"""离散控制示例：开灯、关灯、查询状态。"""
+	"""离散控制示例：灯光与空调即时控制。"""
 
 	return [
 		{
@@ -49,65 +35,83 @@ def build_discrete_demo_requests(session_id: str) -> list[dict]:
 			"session_id": session_id,
 			"intent": "打开客厅的灯",
 			"action": {
-				"mode": "discrete",
 				"device": "light",
 				"target": "living_room_light_1",
 				"command": "turn_on",
 				"params": {},
 			},
-			"options": {"advance_ticks": 1},
 		},
 		{
 			"request_id": "demo-discrete-2",
 			"session_id": session_id,
-			"intent": "关闭客厅的灯",
+			"intent": "把客厅灯调到 60 亮度",
 			"action": {
-				"mode": "discrete",
 				"device": "light",
 				"target": "living_room_light_1",
-				"command": "turn_off",
-				"params": {},
+				"command": "set_brightness",
+				"params": {"brightness": 60},
 			},
-			"options": {"advance_ticks": 0},
+		},
+		{
+			"request_id": "demo-discrete-3",
+			"session_id": session_id,
+			"intent": "把空调设成制冷",
+			"action": {
+				"device": "ac",
+				"target": "living_room_ac_1",
+				"command": "set_mode",
+				"params": {"mode": "cool"},
+			},
+		},
+		{
+			"request_id": "demo-discrete-4",
+			"session_id": session_id,
+			"intent": "把空调调到 24 度",
+			"action": {
+				"device": "ac",
+				"target": "living_room_ac_1",
+				"command": "set_temperature",
+				"params": {"temperature": 24.0},
+			},
 		},
 	]
 
 
-def build_continuous_demo_requests(session_id: str) -> list[dict]:
-	"""连续控制示例：下发机器人目标点并推进时间。"""
+def build_timed_demo_requests(session_id: str) -> list[dict]:
+	"""计时任务示例：启动洗衣并在后续轮询查看状态。"""
 
 	return [
 		{
-			"request_id": "demo-continuous-1",
+			"request_id": "demo-timed-1",
 			"session_id": session_id,
-			"intent": "让扫地机器人移动到沙发旁边",
+			"intent": "开始标准洗衣",
 			"action": {
-				"mode": "continuous",
-				"device": "robot_vacuum",
-				"target": "robot_vacuum_1",
-				"command": "move_to",
-				"params": {"x": 2.0, "y": 6.5, "speed": 0.8},
+				"device": "washing_machine",
+				"target": "washing_machine_1",
+				"command": "start_wash",
+				"params": {"program": "standard", "duration_seconds": 6},
 			},
-			"options": {"advance_ticks": 3},
 		},
+		{"kind": "wait", "seconds": 2, "label": "等待 2 秒，模拟后台计时"},
+		{"kind": "poll", "label": "2 秒后查询洗衣机状态"},
 		{
-			"request_id": "demo-continuous-2",
+			"request_id": "demo-timed-2",
 			"session_id": session_id,
-			"intent": "继续推进环境，观察机器人位置",
+			"intent": "洗衣过程中打开客厅灯",
 			"action": {
-				"mode": "discrete",
-				"device": "system",
-				"target": "clock",
-				"command": "advance",
-				"params": {"ticks": 5},
+				"device": "light",
+				"target": "living_room_light_1",
+				"command": "turn_on",
+				"params": {},
 			},
-			"options": {"advance_ticks": 0},
 		},
+		{"kind": "wait", "seconds": 5, "label": "再等待 5 秒，观察洗衣完成"},
+		{"kind": "poll", "label": "洗衣完成后查询状态"},
 	]
 
 
 def build_mixed_demo_requests(session_id: str) -> list[dict]:
-	"""混合示例：夜间回家联动。"""
+	"""混合示例：回家联动加洗衣任务。"""
 
 	return [
 		{
@@ -115,51 +119,45 @@ def build_mixed_demo_requests(session_id: str) -> list[dict]:
 			"session_id": session_id,
 			"intent": "我到家了，帮我准备客厅",
 			"action": {
-				"mode": "discrete",
 				"device": "light",
 				"target": "living_room_light_1",
 				"command": "turn_on",
 				"params": {},
 			},
-			"options": {"advance_ticks": 0},
 		},
 		{
 			"request_id": "demo-mixed-2",
 			"session_id": session_id,
 			"intent": "把空调设成制冷并调到 24 度",
 			"action": {
-				"mode": "discrete",
 				"device": "ac",
 				"target": "living_room_ac_1",
 				"command": "set_mode",
 				"params": {"mode": "cool"},
 			},
-			"options": {"advance_ticks": 0},
 		},
 		{
 			"request_id": "demo-mixed-3",
 			"session_id": session_id,
 			"intent": "继续把空调调到 24 度",
 			"action": {
-				"mode": "continuous",
 				"device": "ac",
 				"target": "living_room_ac_1",
 				"command": "set_temperature",
 				"params": {"temperature": 24.0},
 			},
-			"options": {"advance_ticks": 0},
 		},
 		{
 			"request_id": "demo-mixed-4",
 			"session_id": session_id,
-			"intent": "让扫地机器人移到门口待命",
+			"intent": "顺便开始洗衣服",
 			"action": {
-				"mode": "continuous",
-				"device": "robot_vacuum",
-				"target": "robot_vacuum_1",
-				"command": "move_to",
-				"params": {"x": 1.0, "y": 7.0, "speed": 0.6},
+				"device": "washing_machine",
+				"target": "washing_machine_1",
+				"command": "start_wash",
+				"params": {"program": "quick", "duration_seconds": 8},
 			},
-			"options": {"advance_ticks": 5},
 		},
+		{"kind": "wait", "seconds": 3, "label": "等待 3 秒，查看洗衣剩余时间"},
+		{"kind": "poll", "label": "混合场景中间状态"},
 	]

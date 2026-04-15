@@ -1,47 +1,13 @@
-"""设备模型与基础物理规则。"""
+"""设备模型与计时任务规则。"""
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from math import hypot
+from dataclasses import dataclass
+from datetime import datetime
+from math import ceil
 from typing import Any
 
-from environment.actions import (
-	ERROR_DEVICE_OFFLINE,
-	ERROR_INVALID_PARAM,
-	ERROR_TARGET_UNREACHABLE,
-	ERROR_UNSUPPORTED_COMMAND,
-	ProtocolError,
-)
-
-
-@dataclass(slots=True)
-class Room:
-	"""房间布局与简单障碍定义。"""
-
-	room_id: str
-	name: str
-	width: float
-	height: float
-	blocked_zones: list[dict[str, float]] = field(default_factory=list)
-
-	def contains(self, x: float, y: float) -> bool:
-		return 0.0 <= x <= self.width and 0.0 <= y <= self.height
-
-	def is_blocked(self, x: float, y: float) -> bool:
-		for zone in self.blocked_zones:
-			if zone["x1"] <= x <= zone["x2"] and zone["y1"] <= y <= zone["y2"]:
-				return True
-		return False
-
-	def snapshot(self) -> dict[str, Any]:
-		return {
-			"room_id": self.room_id,
-			"name": self.name,
-			"width": self.width,
-			"height": self.height,
-			"blocked_zones": self.blocked_zones,
-		}
+from environment.actions import ERROR_DEVICE_OFFLINE, ERROR_INVALID_PARAM, ERROR_UNSUPPORTED_COMMAND, ProtocolError
 
 
 @dataclass(slots=True)
@@ -57,13 +23,10 @@ class Device:
 		if not self.online:
 			raise ProtocolError(ERROR_DEVICE_OFFLINE, f"设备 {self.device_id} 当前离线")
 
-	def handle_discrete(self, command: str, params: dict[str, Any]) -> list[dict[str, Any]]:
-		raise ProtocolError(ERROR_UNSUPPORTED_COMMAND, f"{self.device_type} 不支持离散命令 {command}")
+	def handle_command(self, command: str, params: dict[str, Any], current_time: float) -> list[dict[str, Any]]:
+		raise ProtocolError(ERROR_UNSUPPORTED_COMMAND, f"{self.device_type} 不支持命令 {command}")
 
-	def handle_continuous(self, command: str, params: dict[str, Any], room: Room) -> list[dict[str, Any]]:
-		raise ProtocolError(ERROR_UNSUPPORTED_COMMAND, f"{self.device_type} 不支持连续命令 {command}")
-
-	def advance(self, room: Room) -> list[dict[str, Any]]:
+	def sync_time(self, current_time: float) -> list[dict[str, Any]]:
 		return []
 
 	def snapshot(self) -> dict[str, Any]:
@@ -82,7 +45,7 @@ class Light(Device):
 	is_on: bool = False
 	brightness: int = 0
 
-	def handle_discrete(self, command: str, params: dict[str, Any]) -> list[dict[str, Any]]:
+	def handle_command(self, command: str, params: dict[str, Any], current_time: float) -> list[dict[str, Any]]:
 		self.ensure_online()
 		if command == "turn_on":
 			self.is_on = True
@@ -90,28 +53,18 @@ class Light(Device):
 		elif command == "turn_off":
 			self.is_on = False
 			self.brightness = 0
+		elif command == "set_brightness":
+			brightness = int(_require_number(params, "brightness"))
+			if brightness < 0 or brightness > 100:
+				raise ProtocolError(ERROR_INVALID_PARAM, "brightness 必须位于 0-100")
+			self.brightness = brightness
+			self.is_on = brightness > 0
 		else:
 			raise ProtocolError(ERROR_UNSUPPORTED_COMMAND, f"灯光不支持命令 {command}")
 
+		event_type = "light_brightness_changed" if command == "set_brightness" else "light_state_changed"
 		return [{
-			"type": "light_state_changed",
-			"source": self.device_id,
-			"payload": {"is_on": self.is_on, "brightness": self.brightness},
-		}]
-
-	def handle_continuous(self, command: str, params: dict[str, Any], room: Room) -> list[dict[str, Any]]:
-		self.ensure_online()
-		if command != "set_brightness":
-			raise ProtocolError(ERROR_UNSUPPORTED_COMMAND, f"灯光不支持连续命令 {command}")
-
-		brightness = int(_require_number(params, "brightness"))
-		if brightness < 0 or brightness > 100:
-			raise ProtocolError(ERROR_INVALID_PARAM, "brightness 必须位于 0-100")
-
-		self.brightness = brightness
-		self.is_on = brightness > 0
-		return [{
-			"type": "light_brightness_changed",
+			"type": event_type,
 			"source": self.device_id,
 			"payload": {"is_on": self.is_on, "brightness": self.brightness},
 		}]
@@ -131,7 +84,7 @@ class AirConditioner(Device):
 	target_temperature: float = 26.0
 	fan_speed: float = 1.0
 
-	def handle_discrete(self, command: str, params: dict[str, Any]) -> list[dict[str, Any]]:
+	def handle_command(self, command: str, params: dict[str, Any], current_time: float) -> list[dict[str, Any]]:
 		self.ensure_online()
 		if command == "turn_on":
 			self.is_on = True
@@ -143,33 +96,24 @@ class AirConditioner(Device):
 				raise ProtocolError(ERROR_INVALID_PARAM, "mode 必须是 cool/heat/fan/dry 之一")
 			self.mode = mode
 			self.is_on = True
-		else:
-			raise ProtocolError(ERROR_UNSUPPORTED_COMMAND, f"空调不支持命令 {command}")
-
-		return [{
-			"type": "ac_state_changed",
-			"source": self.device_id,
-			"payload": {"is_on": self.is_on, "mode": self.mode},
-		}]
-
-	def handle_continuous(self, command: str, params: dict[str, Any], room: Room) -> list[dict[str, Any]]:
-		self.ensure_online()
-		if command == "set_temperature":
+		elif command == "set_temperature":
 			temperature = round(_require_number(params, "temperature"), 1)
 			if temperature < 16.0 or temperature > 30.0:
 				raise ProtocolError(ERROR_INVALID_PARAM, "temperature 必须位于 16-30")
 			self.target_temperature = temperature
+			self.is_on = True
 		elif command == "set_fan_speed":
 			fan_speed = round(_require_number(params, "fan_speed"), 2)
 			if fan_speed < 0.1 or fan_speed > 5.0:
 				raise ProtocolError(ERROR_INVALID_PARAM, "fan_speed 必须位于 0.1-5.0")
 			self.fan_speed = fan_speed
+			self.is_on = True
 		else:
-			raise ProtocolError(ERROR_UNSUPPORTED_COMMAND, f"空调不支持连续命令 {command}")
+			raise ProtocolError(ERROR_UNSUPPORTED_COMMAND, f"空调不支持命令 {command}")
 
-		self.is_on = True
+		event_type = "ac_state_changed" if command in {"turn_on", "turn_off", "set_mode"} else "ac_setting_changed"
 		return [{
-			"type": "ac_setting_changed",
+			"type": event_type,
 			"source": self.device_id,
 			"payload": {
 				"is_on": self.is_on,
@@ -191,116 +135,121 @@ class AirConditioner(Device):
 
 
 @dataclass(slots=True)
-class RobotVacuum(Device):
-	"""扫地机器人，支持目标点移动与简单避障。"""
+class WashingMachine(Device):
+	"""洗衣机设备，支持后台计时任务。"""
 
-	position_x: float = 0.0
-	position_y: float = 0.0
-	default_speed: float = 0.5
 	status: str = "idle"
-	target_x: float | None = None
-	target_y: float | None = None
-	current_speed: float = 0.5
+	program: str = "standard"
+	duration_seconds: int = 1800
+	remaining_seconds: int = 0
+	started_at: float | None = None
+	expected_finish_at: float | None = None
+	paused_at: float | None = None
+	completed_at: float | None = None
 
-	def handle_discrete(self, command: str, params: dict[str, Any]) -> list[dict[str, Any]]:
+	def handle_command(self, command: str, params: dict[str, Any], current_time: float) -> list[dict[str, Any]]:
 		self.ensure_online()
-		if command == "start_cleaning":
-			self.status = "cleaning"
-		elif command == "stop":
-			self.status = "idle"
-			self.target_x = None
-			self.target_y = None
-		elif command == "dock":
-			self.status = "returning"
-			self.target_x = 0.0
-			self.target_y = 0.0
-		else:
-			raise ProtocolError(ERROR_UNSUPPORTED_COMMAND, f"扫地机器人不支持命令 {command}")
+		self._refresh_remaining(current_time)
+		if command == "start_wash":
+			if self.status == "running":
+				raise ProtocolError(ERROR_INVALID_PARAM, "洗衣机正在运行，不能重复启动")
+			program = params.get("program", "standard")
+			duration_seconds = int(_require_positive_number(params, "duration_seconds", default=1800))
+			self.status = "running"
+			self.program = str(program)
+			self.duration_seconds = duration_seconds
+			self.remaining_seconds = duration_seconds
+			self.started_at = current_time
+			self.expected_finish_at = current_time + duration_seconds
+			self.paused_at = None
+			self.completed_at = None
+			return [{
+				"type": "washing_started",
+				"source": self.device_id,
+				"payload": {
+					"program": self.program,
+					"duration_seconds": self.duration_seconds,
+					"expected_finish_at": _format_timestamp(self.expected_finish_at),
+				},
+			}]
+		if command == "pause":
+			if self.status != "running":
+				raise ProtocolError(ERROR_INVALID_PARAM, "洗衣机当前不在运行，无法暂停")
+			self.status = "paused"
+			self.paused_at = current_time
+			self.expected_finish_at = None
+			return [{
+				"type": "washing_paused",
+				"source": self.device_id,
+				"payload": {"remaining_seconds": self.remaining_seconds},
+			}]
+		if command == "resume":
+			if self.status != "paused":
+				raise ProtocolError(ERROR_INVALID_PARAM, "洗衣机当前不在暂停状态，无法继续")
+			self.status = "running"
+			self.paused_at = None
+			self.expected_finish_at = current_time + self.remaining_seconds
+			return [{
+				"type": "washing_resumed",
+				"source": self.device_id,
+				"payload": {
+					"remaining_seconds": self.remaining_seconds,
+					"expected_finish_at": _format_timestamp(self.expected_finish_at),
+				},
+			}]
+		if command == "cancel":
+			if self.status not in {"running", "paused", "completed"}:
+				raise ProtocolError(ERROR_INVALID_PARAM, "洗衣机当前没有可取消的任务")
+			self.status = "cancelled"
+			self.remaining_seconds = 0
+			self.expected_finish_at = None
+			self.paused_at = None
+			return [{
+				"type": "washing_cancelled",
+				"source": self.device_id,
+				"payload": {"program": self.program},
+			}]
+		raise ProtocolError(ERROR_UNSUPPORTED_COMMAND, f"洗衣机不支持命令 {command}")
 
-		return [{
-			"type": "robot_state_changed",
-			"source": self.device_id,
-			"payload": {"status": self.status},
-		}]
-
-	def handle_continuous(self, command: str, params: dict[str, Any], room: Room) -> list[dict[str, Any]]:
-		self.ensure_online()
-		if command != "move_to":
-			raise ProtocolError(ERROR_UNSUPPORTED_COMMAND, f"扫地机器人不支持连续命令 {command}")
-
-		target_x = _require_number(params, "x")
-		target_y = _require_number(params, "y")
-		speed = _require_number(params, "speed") if "speed" in params else self.default_speed
-		if speed <= 0:
-			raise ProtocolError(ERROR_INVALID_PARAM, "speed 必须大于 0")
-		if not room.contains(target_x, target_y):
-			raise ProtocolError(ERROR_TARGET_UNREACHABLE, "目标点超出房间边界")
-		if room.is_blocked(target_x, target_y):
-			raise ProtocolError(ERROR_TARGET_UNREACHABLE, "目标点位于障碍区")
-
-		self.target_x = target_x
-		self.target_y = target_y
-		self.current_speed = speed
-		self.status = "moving"
-		return [{
-			"type": "robot_target_updated",
-			"source": self.device_id,
-			"payload": {"target_x": self.target_x, "target_y": self.target_y, "speed": self.current_speed},
-		}]
-
-	def advance(self, room: Room) -> list[dict[str, Any]]:
-		if self.target_x is None or self.target_y is None:
+	def sync_time(self, current_time: float) -> list[dict[str, Any]]:
+		if self.status != "running":
 			return []
-
-		distance = hypot(self.target_x - self.position_x, self.target_y - self.position_y)
-		if distance <= self.current_speed:
-			self.position_x = self.target_x
-			self.position_y = self.target_y
-			self.target_x = None
-			self.target_y = None
-			self.status = "idle"
+		self._refresh_remaining(current_time)
+		if self.expected_finish_at is not None and current_time >= self.expected_finish_at:
+			self.status = "completed"
+			self.remaining_seconds = 0
+			self.completed_at = self.expected_finish_at
+			self.expected_finish_at = None
+			self.paused_at = None
 			return [{
-				"type": "robot_arrived",
+				"type": "washing_completed",
 				"source": self.device_id,
-				"payload": {"x": self.position_x, "y": self.position_y},
+				"payload": {
+					"program": self.program,
+					"completed_at": _format_timestamp(self.completed_at),
+				},
 			}]
-
-		ratio = self.current_speed / distance
-		next_x = self.position_x + (self.target_x - self.position_x) * ratio
-		next_y = self.position_y + (self.target_y - self.position_y) * ratio
-
-		if not room.contains(next_x, next_y):
-			self.status = "blocked"
-			return [{
-				"type": "robot_boundary_blocked",
-				"source": self.device_id,
-				"payload": {"x": next_x, "y": next_y},
-			}]
-		if room.is_blocked(next_x, next_y):
-			self.status = "blocked"
-			return [{
-				"type": "robot_obstacle_detected",
-				"source": self.device_id,
-				"payload": {"x": next_x, "y": next_y},
-			}]
-
-		self.position_x = next_x
-		self.position_y = next_y
-		return [{
-			"type": "robot_position_updated",
-			"source": self.device_id,
-			"payload": {"x": self.position_x, "y": self.position_y, "status": self.status},
-		}]
+		return []
 
 	def snapshot(self) -> dict[str, Any]:
 		data = super().snapshot()
 		data.update({
-			"position": {"x": self.position_x, "y": self.position_y},
-			"target": None if self.target_x is None else {"x": self.target_x, "y": self.target_y},
 			"status": self.status,
-			"current_speed": self.current_speed,
+			"program": self.program,
+			"duration_seconds": self.duration_seconds,
+			"remaining_seconds": self.remaining_seconds,
+			"started_at": _format_timestamp(self.started_at),
+			"expected_finish_at": _format_timestamp(self.expected_finish_at),
+			"paused_at": _format_timestamp(self.paused_at),
+			"completed_at": _format_timestamp(self.completed_at),
 		})
 		return data
+
+	def _refresh_remaining(self, current_time: float) -> None:
+		if self.status != "running" or self.expected_finish_at is None:
+			return
+		remaining = max(0, ceil(self.expected_finish_at - current_time))
+		self.remaining_seconds = remaining
 
 
 def _require_number(params: dict[str, Any], key: str) -> float:
@@ -308,3 +257,20 @@ def _require_number(params: dict[str, Any], key: str) -> float:
 	if not isinstance(value, (int, float)):
 		raise ProtocolError(ERROR_INVALID_PARAM, f"{key} 必须是数值")
 	return float(value)
+
+
+def _require_positive_number(params: dict[str, Any], key: str, default: float | None = None) -> float:
+	if key not in params:
+		if default is None:
+			raise ProtocolError(ERROR_INVALID_PARAM, f"{key} 必须是正数")
+		return default
+	value = _require_number(params, key)
+	if value <= 0:
+		raise ProtocolError(ERROR_INVALID_PARAM, f"{key} 必须大于 0")
+	return value
+
+
+def _format_timestamp(timestamp: float | None) -> str | None:
+	if timestamp is None:
+		return None
+	return datetime.fromtimestamp(timestamp).isoformat(timespec="seconds")

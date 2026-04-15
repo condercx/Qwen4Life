@@ -23,10 +23,6 @@ def parse_agent_plan(raw_text: str) -> AgentPlan:
 	if reply_hint is not None and not isinstance(reply_hint, str):
 		raise ValueError("reply_hint 必须是字符串或 null")
 
-	options = payload.get("options") or {}
-	if not isinstance(options, dict):
-		raise ValueError("options 必须是字典")
-
 	if plan_type == "state_query":
 		if payload.get("action") is not None:
 			raise ValueError("state_query 的 action 必须为 null")
@@ -35,7 +31,6 @@ def parse_agent_plan(raw_text: str) -> AgentPlan:
 			intent=intent,
 			reply_hint=reply_hint,
 			action=None,
-			options=options,
 		)
 
 	if plan_type != "environment_action":
@@ -45,7 +40,7 @@ def parse_agent_plan(raw_text: str) -> AgentPlan:
 	if not isinstance(action, dict):
 		raise ValueError("environment_action 的 action 必须是字典")
 
-	for key in ("mode", "device", "target", "command"):
+	for key in ("device", "target", "command"):
 		_require_string(action, key)
 	params = action.get("params")
 	if params is None:
@@ -58,7 +53,6 @@ def parse_agent_plan(raw_text: str) -> AgentPlan:
 		intent=intent,
 		reply_hint=reply_hint,
 		action=action,
-		options=options,
 	)
 
 

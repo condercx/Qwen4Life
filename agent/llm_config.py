@@ -12,19 +12,23 @@ _ENV_FILES_LOADED = False
 
 @dataclass(slots=True)
 class LLMConfig:
-	"""模型调用配置。当前默认走硅基流动在线接口，后续可扩展到本地模型。"""
+	"""模型调用配置。当前默认走集成在本地的 Ollama 接口。"""
 
-	provider: str = "siliconflow"
+	provider: str = "ollama"
 	backend: str = "openai_compatible_remote"
-	api_key: str | None = None
-	chat_completions_url: str = "https://api.siliconflow.cn/v1/chat/completions"
-	model: str = "Qwen/Qwen3.5-4B"
-	timeout_seconds: int = 60
-	temperature: float = 0.1
-	top_p: float = 0.7
-	max_tokens: int = 10240
+	api_key: str | None = "ollama"
+	chat_completions_url: str = "http://127.0.0.1:11434/v1/chat/completions"
+	model: str = "qwen3.5:4b"
+	timeout_seconds: int = 300
+	temperature: float = 0.6
+	top_p: float = 0.95
+	top_k: int = 20
+	min_p: float = 0.0
+	presence_penalty: float = 0.0
+	repetition_penalty: float = 1.0
+	max_tokens: int = 4096
 	n: int = 1
-	force_json_output: bool = True
+	force_json_output: bool = False
 	enable_thinking: bool | None = None
 	thinking_budget: int | None = None
 
@@ -34,26 +38,30 @@ class LLMConfig:
 
 		_load_default_env_files()
 
-		provider = os.getenv("AGENT_MODEL_PROVIDER", "siliconflow")
+		provider = os.getenv("AGENT_MODEL_PROVIDER", "ollama")
 		backend = os.getenv("AGENT_MODEL_BACKEND", "openai_compatible_remote")
-		api_key = os.getenv("AGENT_MODEL_API_KEY")
+		api_key = os.getenv("AGENT_MODEL_API_KEY", "ollama")
 		chat_completions_url = os.getenv(
 			"AGENT_MODEL_CHAT_COMPLETIONS_URL",
-			"https://api.siliconflow.cn/v1/chat/completions",
+			"http://127.0.0.1:11434/v1/chat/completions",
 		)
-		model = os.getenv("AGENT_MODEL_NAME", "Qwen/Qwen3.5-4B")
+		model = os.getenv("AGENT_MODEL_NAME", "qwen3.5:4b")
 		return cls(
 			provider=provider,
 			backend=backend,
 			api_key=api_key,
 			chat_completions_url=chat_completions_url,
 			model=model,
-			timeout_seconds=int(os.getenv("AGENT_MODEL_TIMEOUT_SECONDS", "60")),
-			temperature=float(os.getenv("AGENT_MODEL_TEMPERATURE", "0.1")),
-			top_p=float(os.getenv("AGENT_MODEL_TOP_P", "0.7")),
-			max_tokens=int(os.getenv("AGENT_MODEL_MAX_TOKENS", "10240")),
+			timeout_seconds=int(os.getenv("AGENT_MODEL_TIMEOUT_SECONDS", "300")),
+			temperature=float(os.getenv("AGENT_MODEL_TEMPERATURE", "0.6")),
+			top_p=float(os.getenv("AGENT_MODEL_TOP_P", "0.95")),
+			top_k=int(os.getenv("AGENT_MODEL_TOP_K", "20")),
+			min_p=float(os.getenv("AGENT_MODEL_MIN_P", "0.0")),
+			presence_penalty=float(os.getenv("AGENT_MODEL_PRESENCE_PENALTY", "0.0")),
+			repetition_penalty=float(os.getenv("AGENT_MODEL_REPETITION_PENALTY", "1.0")),
+			max_tokens=int(os.getenv("AGENT_MODEL_MAX_TOKENS", "4096")),
 			n=int(os.getenv("AGENT_MODEL_N", "1")),
-			force_json_output=os.getenv("AGENT_MODEL_FORCE_JSON_OUTPUT", "true").lower() in {"1", "true", "yes", "on"},
+			force_json_output=os.getenv("AGENT_MODEL_FORCE_JSON_OUTPUT", "false").lower() in {"1", "true", "yes", "on"},
 			enable_thinking=_optional_bool(os.getenv("AGENT_MODEL_ENABLE_THINKING")),
 			thinking_budget=_optional_int(os.getenv("AGENT_MODEL_THINKING_BUDGET")),
 		)

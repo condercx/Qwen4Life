@@ -1,120 +1,111 @@
-# 智能家居最小 Agent
+# Agent — 智能家居 ReAct 控制器
 
-这个目录提供一个最小可运行的上层 agent，用于通过硅基流动在线模型把用户自然语言转换成环境动作，然后调用 environment 中的 adapter 执行。
+基于 **ReAct**（Reasoning + Acting）范式的智能家居对话代理。通过本地大模型理解自然语言指令，自主推理并调用工具控制家中设备，最终以流式自然语言回复用户。
 
-当前版本的主场景已经切换为“即时控制 + 计时任务”。也就是说，agent 不再规划机器人路径或时间推进参数，而是直接处理像“打开客厅灯”“把空调调到 24 度”“开始洗衣服”“洗衣机还剩多久”这类更接近真实家庭交互的请求。
+## 工作原理
+
+Agent 在每一轮对话中执行如下循环，直到生成最终回复或达到步数上限：
+
+```
+用户输入 → Thought（思考意图）→ Action（调用工具）→ Observation（接收结果）→ … → Answer（回复用户）
+```
+
+- 用户说「我有点冷」→ 模型先查询空调状态，发现关着 → 开空调 → 调温度 → 回复「已经帮你打开空调并调到 26 度」
+- 简单问候不需要工具调用，模型直接给出 Answer
+
+## 快速开始
+
+### 1. 安装依赖
+
+```bash
+pip install -r requirements.txt
+```
+
+### 2. 启动 Ollama
+
+下载 [Ollama](https://ollama.com) 并拉取模型：
+
+```bash
+ollama run qwen3.5:4b
+```
+
+Ollama 会在后台持续监听 `http://127.0.0.1:11434`。
+
+### 3. 配置环境变量
+
+复制配置模板并按需修改：
+
+```bash
+cp agent/.env.example agent/.env
+```
+
+默认配置即可对接本地 Ollama，无需额外修改。如需切换模型，只需改 `AGENT_MODEL_NAME`。
+
+### 4. 启动环境服务
+
+在一个终端中运行模拟环境：
+
+```bash
+python -m environment.server
+```
+
+### 5. 启动 Agent
+
+另开一个终端，启动交互式对话：
+
+```bash
+# 普通模式 — 只显示最终回复
+python -m agent.demo
+
+# 详细模式 — 显示完整推理链和工具调用过程
+python -m agent.demo -v
+```
+
+也支持单轮调用：
+
+```bash
+python -m agent.demo "帮我把客厅灯打开"
+```
+
+## 交互示例
+
+```
+用户> 我热了
+
+助手>
+[💭 思考中...] 用户觉得热，我先查一下空调状态。
+[🎯 确定行动...]
+🔧 [调用工具: query_all_devices({})]
+📋 观测结果: [客厅空调] 状态：关闭，模式 制冷，目标温度 26.0°C
+
+助手>
+[💭 思考中...] 空调关着，帮用户打开并适当调低温度。
+[🎯 确定行动...]
+🔧 [调用工具: control_device(device_id="living_room_ac_1", command="turn_on")]
+📋 观测结果: 操作成功。
+
+助手> 空调已经帮你打开了，目前是制冷模式 26°C，如果还觉得热我再帮你调低。
+```
+
+> 以上为 `-v`（详细模式）输出。普通模式只显示最终回复。
 
 ## 目录结构
 
-- `llm_config.py`：读取通用模型配置。
-- `llm_client.py`：统一模型客户端接口与当前远程实现。
-- `prompts.py`：系统提示词与用户提示词。
-- `schema.py`：agent 内部使用的数据结构。
-- `parser.py`：解析模型输出 JSON。
-- `controller.py`：主流程编排。
-- `demo.py`：命令行入口。
-- `requirements.txt`：依赖说明。
-- `.env.example`：环境变量示例。
+| 文件 | 职责 |
+|------|------|
+| `controller.py` | ReAct 循环核心，协调模型调用、工具执行和对话历史管理 |
+| `llm_client.py` | OpenAI 兼容 HTTP 客户端，支持流式输出和 `<think>` 标签解析 |
+| `llm_config.py` | 从 `.env` 文件和环境变量读取模型配置（采样参数、端点等） |
+| `parser.py` | 从模型输出文本中提取 `Thought` / `Action` / `Answer` 结构 |
+| `prompts.py` | System prompt 模板，定义 ReAct 格式约定和设备清单 |
+| `tools.py` | 工具注册中心，将 `query_all_devices` / `control_device` 桥接到环境服务 |
+| `schema.py` | 内部数据结构定义（`ReactStep`、`AgentResult`） |
+| `demo.py` | CLI 入口，渲染流式打字机效果 |
 
-## 工作流
+## 扩展指南
 
-1. 用户输入自然语言。
-2. `controller.py` 调用硅基流动模型。
-3. 模型只输出严格 JSON 计划。
-4. `parser.py` 解析计划。
-5. `controller.py` 调用 `environment/agent_adapter.py`。
-6. environment 返回状态与事件。
-7. agent 生成最终回复。
+**添加新工具**：在 `tools.py` 的 `_register_builtin_tools()` 中调用 `_register()` 注册即可。只需提供工具名、描述、参数说明和处理函数，无需修改其他文件。
 
-## 当前支持的设备语义
+**切换模型**：修改 `.env` 中的 `AGENT_MODEL_NAME` 和 `AGENT_MODEL_CHAT_COMPLETIONS_URL`。任何兼容 OpenAI `/v1/chat/completions` 接口的服务都可以直接对接。
 
-- 灯光：打开、关闭、调亮度。
-- 空调：开关、设模式、调温度、调风速。
-- 洗衣机：开始洗衣、暂停、继续、取消、查询剩余时间、查询是否完成。
-
-洗衣机在未指定时长时默认按 30 分钟处理。环境会在每次 `step/get_state/get_events` 前自动同步真实时间，因此用户下一次提问时就能自然看到最新进度。
-
-## 配置
-
-复制 `.env.example` 中的变量到你的本地环境变量中，至少需要：
-
-- `AGENT_MODEL_API_KEY`
-- `AGENT_MODEL_NAME`
-
-### 推荐环境变量
-
-- `AGENT_MODEL_PROVIDER`：模型提供方，例如 `siliconflow`
-- `AGENT_MODEL_BACKEND`：后端类型，当前支持 `openai_compatible_remote`
-- `AGENT_MODEL_API_KEY`
-- `AGENT_MODEL_CHAT_COMPLETIONS_URL`
-- `AGENT_MODEL_NAME`
-- `AGENT_MODEL_TIMEOUT_SECONDS`
-- `AGENT_MODEL_TEMPERATURE`
-- `AGENT_MODEL_TOP_P`
-- `AGENT_MODEL_MAX_TOKENS`
-- `AGENT_MODEL_N`
-- `AGENT_MODEL_FORCE_JSON_OUTPUT`
-- `AGENT_MODEL_ENABLE_THINKING`
-- `AGENT_MODEL_THINKING_BUDGET`
-
-### 当前远程请求与文档对齐点
-
-当前 `llm_client.py` 参考硅基流动 Chat Completions 文档发送请求，包含这些核心字段：
-
-- `model`
-- `messages`
-- `stream=false`
-- `temperature`
-- `top_p`
-- `max_tokens`
-- `n`
-- `response_format={"type": "json_object"}`，用于强约束模型输出 JSON
-- 可选 `enable_thinking`
-- 可选 `thinking_budget`
-
-另外会读取响应头里的 `x-siliconcloud-trace-id`，便于后续排查线上请求问题。
-
-### PowerShell 代理 Workaround
-
-如果你的 Windows 环境依赖 PAC/WPAD 自动代理，而 Python 标准库没有自动吃到 PAC 规则，可以先在当前 PowerShell 会话里手动设置代理，再运行 demo。
-
-当前 `wpad.dat` 对普通外网请求的兜底规则是：`PROXY proxy-shz.intel.com:912`。对 `api.siliconflow.cn` 这类地址，最简单的 workaround 就是显式设置下面三个环境变量：
-
-```powershell
-$env:HTTP_PROXY = "http://proxy-shz.intel.com:912"
-$env:HTTPS_PROXY = "http://proxy-shz.intel.com:912"
-$env:ALL_PROXY = "http://proxy-shz.intel.com:912"
-```
-
-## 运行方式
-
-单轮调用：
-
-```bash
-python -m agent.demo "开始洗衣服"
-```
-
-交互模式：
-
-```bash
-python -m agent.demo
-```
-
-指定会话：
-
-```bash
-python -m agent.demo --session-id my-session "洗衣机还剩多久"
-```
-
-## 当前限制
-
-1. 第一版只支持单轮单动作规划。
-2. 模型输出必须是严格 JSON，否则 parser 会报错。
-3. 复杂多步任务还没有拆解成真正的规划链。
-4. 本地模型后端的接口位置已经预留，但实现还没接入。
-
-## 后续接本地模型的建议
-
-1. 在 `llm_client.py` 中新增 `LocalLLMClient`。
-2. 让 `create_default_llm_client()` 按 `AGENT_MODEL_BACKEND=local` 返回本地实现。
-3. 保持 `controller.py` 不变，让控制器继续只依赖 `LLMClient` 接口。
+**调整推理行为**：`.env` 中的 `AGENT_MODEL_ENABLE_THINKING` 和 `AGENT_MODEL_THINKING_BUDGET` 控制思考模式（需模型支持）。

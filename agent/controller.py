@@ -1,151 +1,181 @@
-"""最小智能家居 agent 控制器。"""
+"""最小智能家居 agent 控制器（ReAct 模式）。"""
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import Any
 
 from agent.llm_client import LLMClient, create_default_llm_client
 from agent.llm_config import LLMConfig
-from agent.parser import parse_agent_plan
+from agent.parser import parse_react_output
 from agent.prompts import build_system_prompt, build_user_prompt
-from agent.schema import AgentPlan, AgentResult
-from environment import AgentEnvironmentAdapter
+from agent.schema import AgentResult, ReactStep
+from agent.tools import ToolRegistry
+
+
+# ReAct 循环最大步数，防止无限循环
+_MAX_REACT_STEPS = 8
 
 
 @dataclass(slots=True)
 class SimpleSmartHomeAgent:
-	"""通过在线模型生成动作，并通过 adapter 调用环境。"""
+	"""通过 ReAct 循环驱动模型与环境交互。
 
-	adapter: AgentEnvironmentAdapter = field(default_factory=AgentEnvironmentAdapter)
+	模型在循环中思考（Thought）、调用工具（Action）、
+	接收结果（Observation），最终生成自然语言回复（Answer）。
+	"""
+
+	tools: ToolRegistry = field(default_factory=ToolRegistry)
 	client: LLMClient | None = None
 	config: LLMConfig | None = None
-	active_sessions: set[str] = field(default_factory=set)
+	# 会话级对话历史，支持多轮上下文
+	_session_histories: dict[str, list[dict[str, str]]] = field(default_factory=dict)
 
 	def __post_init__(self) -> None:
 		if self.client is None:
 			self.client = create_default_llm_client(self.config or LLMConfig.from_env())
 
-	def create_session(self, session_id: str) -> dict:
-		"""显式创建会话，并记录到 agent 内部。"""
+	def create_session(self, session_id: str) -> None:
+		"""初始化会话。"""
 
-		self.active_sessions.add(session_id)
-		return self.adapter.create_session(session_id)
+		self.tools.adapter.create_session(session_id)
+		self._session_histories[session_id] = []
 
 	def handle_user_input(self, session_id: str, user_input: str) -> AgentResult:
-		"""处理单轮用户输入。"""
+		"""处理用户输入，运行 ReAct 循环直到产出最终回复。"""
 
 		self._ensure_session(session_id)
-		messages = [
-			{"role": "system", "content": build_system_prompt()},
-			{"role": "user", "content": build_user_prompt(user_input)},
-		]
-		raw_model_output = self.client.chat_completion(messages)
-		plan = parse_agent_plan(raw_model_output)
 
-		if plan.plan_type == "state_query":
-			state = self.adapter.fetch_state(session_id)
-			events = self.adapter.fetch_events(session_id)
-			reply = self._build_state_reply(plan, state, events)
-			return AgentResult(
-				session_id=session_id,
-				user_input=user_input,
-				plan=plan,
-				reply=reply,
-				state=state,
-				events=events,
-				environment_response=None,
-				raw_model_output=raw_model_output,
-			)
+		# 构建消息序列
+		system_msg = {"role": "system", "content": build_system_prompt(self.tools.get_tools_prompt())}
+		history = self._session_histories[session_id]
+		user_msg = {"role": "user", "content": build_user_prompt(user_input)}
+		history.append(user_msg)
 
-		environment_response = self.adapter.send_action(
-			session_id=session_id,
-			intent=plan.intent,
-			action=plan.action or {},
-		)
-		state = self.adapter.fetch_state(session_id)
-		events = self.adapter.fetch_events(session_id)
-		reply = self._build_action_reply(plan, environment_response, events)
+		steps: list[ReactStep] = []
+		all_messages: list[dict[str, str]] = [system_msg] + list(history)
+
+		for step_idx in range(_MAX_REACT_STEPS):
+			# 调用模型
+			raw_output = self.client.chat_completion(all_messages)
+			parsed = parse_react_output(raw_output)
+			steps.append(parsed)
+
+			if parsed.type == "answer":
+				# 模型给出最终回复
+				history.append({"role": "assistant", "content": raw_output})
+				self._trim_history(session_id)
+				return AgentResult(
+					session_id=session_id,
+					user_input=user_input,
+					reply=parsed.content,
+					steps=steps,
+					raw_messages=list(all_messages),
+				)
+
+			if parsed.type == "action" and parsed.tool_name:
+				# 执行工具
+				observation = self.tools.execute(
+					session_id=session_id,
+					tool_name=parsed.tool_name,
+					args=parsed.tool_args or {},
+				)
+				obs_step = ReactStep(type="observation", content=observation)
+				steps.append(obs_step)
+
+				# 将 assistant 输出和 observation 加入对话
+				all_messages.append({"role": "assistant", "content": raw_output})
+				all_messages.append({"role": "user", "content": f"Observation: {observation}"})
+				continue
+
+			if parsed.type == "thought":
+				# 纯思考没有动作，追加并让模型继续
+				all_messages.append({"role": "assistant", "content": raw_output})
+				all_messages.append({"role": "user", "content": "请继续，给出 Action 或 Answer。"})
+				continue
+
+		# 超过最大步数，用已有步骤的最后内容作为回复
+		fallback_reply = "抱歉，我处理这个请求时遇到了一些困难，请你再试一次或换个说法。"
+		history.append({"role": "assistant", "content": fallback_reply})
 		return AgentResult(
 			session_id=session_id,
 			user_input=user_input,
-			plan=plan,
-			reply=reply,
-			state=state,
-			events=events,
-			environment_response=environment_response,
-			raw_model_output=raw_model_output,
+			reply=fallback_reply,
+			steps=steps,
+			raw_messages=list(all_messages),
 		)
+
+	def handle_user_input_stream(self, session_id: str, user_input: str):
+		"""流式处理用户输入，支持中途停顿执行工具。"""
+		self._ensure_session(session_id)
+
+		system_msg = {"role": "system", "content": build_system_prompt(self.tools.get_tools_prompt())}
+		history = self._session_histories[session_id]
+		user_msg = {"role": "user", "content": build_user_prompt(user_input)}
+		history.append(user_msg)
+
+		all_messages: list[dict[str, str]] = [system_msg] + list(history)
+
+		for step_idx in range(_MAX_REACT_STEPS):
+			raw_output = ""
+			try:
+				for chunk in self.client.chat_completion_stream(all_messages):
+					if chunk["type"] == "reasoning":
+						yield {"type": "reasoning", "content": chunk["content"]}
+					elif chunk["type"] == "content":
+						yield {"type": "content", "content": chunk["content"]}
+						# 只拼接正文内容，reasoning 不参与后续 Action/Answer 解析
+						raw_output += chunk["content"]
+			except Exception as exc:
+				yield {"type": "error", "content": f"\n[请求异常]: {exc}\n"}
+				break
+
+			# 收到完整的一轮模型输出后解析动作
+			parsed = parse_react_output(raw_output)
+
+			if parsed.type == "answer":
+				history.append({"role": "assistant", "content": raw_output})
+				self._trim_history(session_id)
+				yield {"type": "final_reply", "content": parsed.content}
+				return
+
+			if parsed.type == "action" and parsed.tool_name:
+				yield {"type": "action_start", "content": f"\n[调用工具: {parsed.tool_name}({parsed.tool_args})]\n"}
+				
+				observation = self.tools.execute(
+					session_id=session_id,
+					tool_name=parsed.tool_name,
+					args=parsed.tool_args or {},
+				)
+				
+				yield {"type": "observation", "content": f"[工具返回: {observation}]\n"}
+				
+				all_messages.append({"role": "assistant", "content": raw_output})
+				all_messages.append({"role": "user", "content": f"Observation: {observation}"})
+				continue
+
+			if parsed.type == "thought":
+				all_messages.append({"role": "assistant", "content": raw_output})
+				all_messages.append({"role": "user", "content": "请继续，给出 Action 或 Answer。"})
+				continue
+
+		fallback_reply = "抱歉，我处理这个请求时遇到了一些困难，请你再试一次或换个说法。"
+		history.append({"role": "assistant", "content": fallback_reply})
+		self._trim_history(session_id)
+		yield {"type": "error", "content": fallback_reply}
 
 	def _ensure_session(self, session_id: str) -> None:
 		"""确保 session 已初始化。"""
 
-		if session_id not in self.active_sessions:
+		if session_id not in self._session_histories:
 			self.create_session(session_id)
 
-	def _build_state_reply(self, plan: AgentPlan, state: dict, events: list[dict]) -> str:
-		"""生成状态查询类回复。"""
+	def _trim_history(self, session_id: str, max_turns: int = 20) -> None:
+		"""修剪对话历史，防止 token 无限增长。
 
-		prefix = plan.reply_hint or "当前环境状态如下。"
-		descriptions = [self._describe_device(device) for device in state["devices"].values()]
-		event_summary = ""
-		if events:
-			event_summary = " 刚发生的事件有：" + "，".join(self._describe_event_type(event["type"]) for event in events) + "。"
-		return f"{prefix} {'；'.join(descriptions)}。{event_summary}".strip()
+		保留最近 max_turns 条消息。
+		"""
 
-	def _build_action_reply(self, plan: AgentPlan, environment_response: dict, events: list[dict]) -> str:
-		"""生成动作执行类回复。"""
-
-		if environment_response["success"]:
-			event_types = ", ".join(event["type"] for event in events) if events else "无"
-			prefix = plan.reply_hint or "动作已执行。"
-			return f"{prefix} 当前产生的事件有：{event_types}。"
-		error = environment_response["error"]
-		return f"动作执行失败，错误码 {error['code']}，原因：{error['message']}。"
-
-	def _describe_device(self, device: dict) -> str:
-		device_type = device["device_type"]
-		if device_type == "light":
-			return f"灯光{'开启' if device['is_on'] else '关闭'}，亮度 {device['brightness']}"
-		if device_type == "ac":
-			return (
-				f"空调{'开启' if device['is_on'] else '关闭'}，模式 {device['mode']}，"
-				f"目标温度 {device['target_temperature']} 度"
-			)
-		if device_type == "washing_machine":
-			status = device["status"]
-			if status == "running":
-				return (
-					f"洗衣机正在运行，程序 {device['program']}，"
-					f"剩余 {self._format_duration(device['remaining_seconds'])}"
-				)
-			if status == "paused":
-				return f"洗衣机已暂停，剩余 {self._format_duration(device['remaining_seconds'])}"
-			if status == "completed":
-				return "洗衣机已完成本轮洗衣"
-			if status == "cancelled":
-				return "洗衣机任务已取消"
-			return "洗衣机当前空闲"
-		return f"设备 {device['name']} 状态未知"
-
-	def _describe_event_type(self, event_type: str) -> str:
-		mapping = {
-			"session_reset": "会话已重置",
-			"light_state_changed": "灯光状态更新",
-			"light_brightness_changed": "灯光亮度更新",
-			"ac_state_changed": "空调状态更新",
-			"ac_setting_changed": "空调参数更新",
-			"washing_started": "洗衣已启动",
-			"washing_paused": "洗衣已暂停",
-			"washing_resumed": "洗衣已继续",
-			"washing_completed": "洗衣已完成",
-			"washing_cancelled": "洗衣已取消",
-		}
-		return mapping.get(event_type, event_type)
-
-	def _format_duration(self, seconds: int) -> str:
-		if seconds < 60:
-			return f"{seconds} 秒"
-		minutes, remain = divmod(seconds, 60)
-		if remain == 0:
-			return f"{minutes} 分钟"
-		return f"{minutes} 分 {remain} 秒"
+		history = self._session_histories.get(session_id)
+		if history and len(history) > max_turns:
+			self._session_histories[session_id] = history[-max_turns:]

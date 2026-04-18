@@ -1,4 +1,4 @@
-"""智能家居 agent 对外导出。"""
+"""智能家居 Agent 模块导出。"""
 
 from agent.controller import SimpleSmartHomeAgent
 from agent.llm_config import LLMConfig

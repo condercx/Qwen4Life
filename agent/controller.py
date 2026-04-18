@@ -1,9 +1,10 @@
-"""最小智能家居 agent 控制器（ReAct 模式）。"""
+"""智能家居 ReAct Agent 控制器。"""
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from dataclasses import dataclass, field
-from typing import Any
+from typing import TypeAlias
 
 from agent.llm_client import LLMClient, create_default_llm_client
 from agent.llm_config import LLMConfig
@@ -12,170 +13,257 @@ from agent.prompts import build_system_prompt, build_user_prompt
 from agent.schema import AgentResult, ReactStep
 from agent.tools import ToolRegistry
 
+Message: TypeAlias = dict[str, str]
+StreamEvent: TypeAlias = dict[str, str]
 
-# ReAct 循环最大步数，防止无限循环
-_MAX_REACT_STEPS = 8
+MAX_REACT_STEPS = 8
+MAX_HISTORY_TURNS = 20
+CONTINUE_PROMPT = "请继续，并给出 Action 或 Answer。"
+FALLBACK_REPLY = "抱歉，我在处理这个请求时遇到了一些问题。请稍后再试，或换一种说法。"
 
 
 @dataclass(slots=True)
 class SimpleSmartHomeAgent:
-	"""通过 ReAct 循环驱动模型与环境交互。
+    """通过 ReAct 循环协调模型推理与工具执行。"""
 
-	模型在循环中思考（Thought）、调用工具（Action）、
-	接收结果（Observation），最终生成自然语言回复（Answer）。
-	"""
+    tools: ToolRegistry = field(default_factory=ToolRegistry)
+    client: LLMClient | None = None
+    config: LLMConfig | None = None
+    _session_histories: dict[str, list[Message]] = field(default_factory=dict)
 
-	tools: ToolRegistry = field(default_factory=ToolRegistry)
-	client: LLMClient | None = None
-	config: LLMConfig | None = None
-	# 会话级对话历史，支持多轮上下文
-	_session_histories: dict[str, list[dict[str, str]]] = field(default_factory=dict)
+    def __post_init__(self) -> None:
+        """延迟创建默认 LLM 客户端。"""
 
-	def __post_init__(self) -> None:
-		if self.client is None:
-			self.client = create_default_llm_client(self.config or LLMConfig.from_env())
+        if self.client is None:
+            self.client = create_default_llm_client(self.config or LLMConfig.from_env())
 
-	def create_session(self, session_id: str) -> None:
-		"""初始化会话。"""
+    def create_session(self, session_id: str) -> None:
+        """创建或重置会话。"""
 
-		self.tools.adapter.create_session(session_id)
-		self._session_histories[session_id] = []
+        normalized_session_id = self._validate_session_id(session_id)
+        self.tools.adapter.create_session(normalized_session_id)
+        self._session_histories[normalized_session_id] = []
 
-	def handle_user_input(self, session_id: str, user_input: str) -> AgentResult:
-		"""处理用户输入，运行 ReAct 循环直到产出最终回复。"""
+    def handle_user_input(self, session_id: str, user_input: str) -> AgentResult:
+        """以非流式方式处理单次用户输入。"""
 
-		self._ensure_session(session_id)
+        normalized_session_id = self._validate_session_id(session_id)
+        normalized_user_input = self._validate_user_input(user_input)
+        history, all_messages = self._prepare_conversation(
+            normalized_session_id,
+            normalized_user_input,
+        )
 
-		# 构建消息序列
-		system_msg = {"role": "system", "content": build_system_prompt(self.tools.get_tools_prompt())}
-		history = self._session_histories[session_id]
-		user_msg = {"role": "user", "content": build_user_prompt(user_input)}
-		history.append(user_msg)
+        steps: list[ReactStep] = []
+        for _ in range(MAX_REACT_STEPS):
+            try:
+                raw_output = self.client.chat_completion(all_messages)
+            except Exception:
+                return self._build_fallback_result(
+                    session_id=normalized_session_id,
+                    user_input=normalized_user_input,
+                    history=history,
+                    steps=steps,
+                    raw_messages=all_messages,
+                )
 
-		steps: list[ReactStep] = []
-		all_messages: list[dict[str, str]] = [system_msg] + list(history)
+            parsed_step = parse_react_output(raw_output)
+            steps.append(parsed_step)
 
-		for step_idx in range(_MAX_REACT_STEPS):
-			# 调用模型
-			raw_output = self.client.chat_completion(all_messages)
-			parsed = parse_react_output(raw_output)
-			steps.append(parsed)
+            if parsed_step.type == "answer":
+                self._store_assistant_message(history, raw_output)
+                self._trim_history(normalized_session_id)
+                return AgentResult(
+                    session_id=normalized_session_id,
+                    user_input=normalized_user_input,
+                    reply=parsed_step.content,
+                    steps=steps,
+                    raw_messages=list(all_messages) + [{"role": "assistant", "content": raw_output}],
+                )
 
-			if parsed.type == "answer":
-				# 模型给出最终回复
-				history.append({"role": "assistant", "content": raw_output})
-				self._trim_history(session_id)
-				return AgentResult(
-					session_id=session_id,
-					user_input=user_input,
-					reply=parsed.content,
-					steps=steps,
-					raw_messages=list(all_messages),
-				)
+            if parsed_step.type == "action" and parsed_step.tool_name:
+                self._execute_action_step(
+                    session_id=normalized_session_id,
+                    parsed_step=parsed_step,
+                    all_messages=all_messages,
+                    steps=steps,
+                    raw_output=raw_output,
+                )
+                continue
 
-			if parsed.type == "action" and parsed.tool_name:
-				# 执行工具
-				observation = self.tools.execute(
-					session_id=session_id,
-					tool_name=parsed.tool_name,
-					args=parsed.tool_args or {},
-				)
-				obs_step = ReactStep(type="observation", content=observation)
-				steps.append(obs_step)
+            self._continue_reasoning(all_messages, raw_output)
 
-				# 将 assistant 输出和 observation 加入对话
-				all_messages.append({"role": "assistant", "content": raw_output})
-				all_messages.append({"role": "user", "content": f"Observation: {observation}"})
-				continue
+        return self._build_fallback_result(
+            session_id=normalized_session_id,
+            user_input=normalized_user_input,
+            history=history,
+            steps=steps,
+            raw_messages=all_messages,
+        )
 
-			if parsed.type == "thought":
-				# 纯思考没有动作，追加并让模型继续
-				all_messages.append({"role": "assistant", "content": raw_output})
-				all_messages.append({"role": "user", "content": "请继续，给出 Action 或 Answer。"})
-				continue
+    def handle_user_input_stream(
+        self,
+        session_id: str,
+        user_input: str,
+    ) -> Iterator[StreamEvent]:
+        """以流式方式处理单次用户输入。"""
 
-		# 超过最大步数，用已有步骤的最后内容作为回复
-		fallback_reply = "抱歉，我处理这个请求时遇到了一些困难，请你再试一次或换个说法。"
-		history.append({"role": "assistant", "content": fallback_reply})
-		return AgentResult(
-			session_id=session_id,
-			user_input=user_input,
-			reply=fallback_reply,
-			steps=steps,
-			raw_messages=list(all_messages),
-		)
+        normalized_session_id = self._validate_session_id(session_id)
+        normalized_user_input = self._validate_user_input(user_input)
+        history, all_messages = self._prepare_conversation(
+            normalized_session_id,
+            normalized_user_input,
+        )
 
-	def handle_user_input_stream(self, session_id: str, user_input: str):
-		"""流式处理用户输入，支持中途停顿执行工具。"""
-		self._ensure_session(session_id)
+        for _ in range(MAX_REACT_STEPS):
+            raw_output = ""
+            try:
+                for chunk in self.client.chat_completion_stream(all_messages):
+                    chunk_type = str(chunk.get("type", ""))
+                    content = str(chunk.get("content", ""))
+                    if chunk_type in {"reasoning", "content"}:
+                        yield {"type": chunk_type, "content": content}
+                    if chunk_type == "content":
+                        raw_output += content
+            except Exception as exc:
+                yield {"type": "error", "content": f"\n[请求异常]：{exc}\n"}
+                break
 
-		system_msg = {"role": "system", "content": build_system_prompt(self.tools.get_tools_prompt())}
-		history = self._session_histories[session_id]
-		user_msg = {"role": "user", "content": build_user_prompt(user_input)}
-		history.append(user_msg)
+            parsed_step = parse_react_output(raw_output)
+            if parsed_step.type == "answer":
+                self._store_assistant_message(history, raw_output)
+                self._trim_history(normalized_session_id)
+                yield {"type": "final_reply", "content": parsed_step.content}
+                return
 
-		all_messages: list[dict[str, str]] = [system_msg] + list(history)
+            if parsed_step.type == "action" and parsed_step.tool_name:
+                yield {
+                    "type": "action_start",
+                    "content": f"\n[调用工具: {parsed_step.tool_name}({parsed_step.tool_args})]\n",
+                }
+                observation = self.tools.execute(
+                    session_id=normalized_session_id,
+                    tool_name=parsed_step.tool_name,
+                    args=parsed_step.tool_args or {},
+                )
+                yield {"type": "observation", "content": f"[工具返回: {observation}]\n"}
+                self._append_action_messages(all_messages, raw_output, observation)
+                continue
 
-		for step_idx in range(_MAX_REACT_STEPS):
-			raw_output = ""
-			try:
-				for chunk in self.client.chat_completion_stream(all_messages):
-					if chunk["type"] == "reasoning":
-						yield {"type": "reasoning", "content": chunk["content"]}
-					elif chunk["type"] == "content":
-						yield {"type": "content", "content": chunk["content"]}
-						# 只拼接正文内容，reasoning 不参与后续 Action/Answer 解析
-						raw_output += chunk["content"]
-			except Exception as exc:
-				yield {"type": "error", "content": f"\n[请求异常]: {exc}\n"}
-				break
+            self._continue_reasoning(all_messages, raw_output)
 
-			# 收到完整的一轮模型输出后解析动作
-			parsed = parse_react_output(raw_output)
+        self._store_assistant_message(history, FALLBACK_REPLY)
+        self._trim_history(normalized_session_id)
+        yield {"type": "error", "content": FALLBACK_REPLY}
 
-			if parsed.type == "answer":
-				history.append({"role": "assistant", "content": raw_output})
-				self._trim_history(session_id)
-				yield {"type": "final_reply", "content": parsed.content}
-				return
+    def _prepare_conversation(
+        self,
+        session_id: str,
+        user_input: str,
+    ) -> tuple[list[Message], list[Message]]:
+        """构造当前轮次的系统消息和上下文。"""
 
-			if parsed.type == "action" and parsed.tool_name:
-				yield {"type": "action_start", "content": f"\n[调用工具: {parsed.tool_name}({parsed.tool_args})]\n"}
-				
-				observation = self.tools.execute(
-					session_id=session_id,
-					tool_name=parsed.tool_name,
-					args=parsed.tool_args or {},
-				)
-				
-				yield {"type": "observation", "content": f"[工具返回: {observation}]\n"}
-				
-				all_messages.append({"role": "assistant", "content": raw_output})
-				all_messages.append({"role": "user", "content": f"Observation: {observation}"})
-				continue
+        self._ensure_session(session_id)
+        history = self._session_histories[session_id]
+        history.append({"role": "user", "content": build_user_prompt(user_input)})
+        system_message = {
+            "role": "system",
+            "content": build_system_prompt(self.tools.get_tools_prompt()),
+        }
+        return history, [system_message, *history]
 
-			if parsed.type == "thought":
-				all_messages.append({"role": "assistant", "content": raw_output})
-				all_messages.append({"role": "user", "content": "请继续，给出 Action 或 Answer。"})
-				continue
+    def _execute_action_step(
+        self,
+        session_id: str,
+        parsed_step: ReactStep,
+        all_messages: list[Message],
+        steps: list[ReactStep],
+        raw_output: str,
+    ) -> None:
+        """执行动作步骤并写回 Observation。"""
 
-		fallback_reply = "抱歉，我处理这个请求时遇到了一些困难，请你再试一次或换个说法。"
-		history.append({"role": "assistant", "content": fallback_reply})
-		self._trim_history(session_id)
-		yield {"type": "error", "content": fallback_reply}
+        if not parsed_step.tool_name:
+            return
 
-	def _ensure_session(self, session_id: str) -> None:
-		"""确保 session 已初始化。"""
+        observation = self.tools.execute(
+            session_id=session_id,
+            tool_name=parsed_step.tool_name,
+            args=parsed_step.tool_args or {},
+        )
+        steps.append(ReactStep(type="observation", content=observation))
+        self._append_action_messages(all_messages, raw_output, observation)
 
-		if session_id not in self._session_histories:
-			self.create_session(session_id)
+    @staticmethod
+    def _append_action_messages(
+        all_messages: list[Message],
+        raw_output: str,
+        observation: str,
+    ) -> None:
+        """把动作输出和观测结果追加到上下文。"""
 
-	def _trim_history(self, session_id: str, max_turns: int = 20) -> None:
-		"""修剪对话历史，防止 token 无限增长。
+        all_messages.append({"role": "assistant", "content": raw_output})
+        all_messages.append({"role": "user", "content": f"Observation: {observation}"})
 
-		保留最近 max_turns 条消息。
-		"""
+    @staticmethod
+    def _continue_reasoning(all_messages: list[Message], raw_output: str) -> None:
+        """要求模型继续补全动作或最终回答。"""
 
-		history = self._session_histories.get(session_id)
-		if history and len(history) > max_turns:
-			self._session_histories[session_id] = history[-max_turns:]
+        all_messages.append({"role": "assistant", "content": raw_output})
+        all_messages.append({"role": "user", "content": CONTINUE_PROMPT})
+
+    @staticmethod
+    def _store_assistant_message(history: list[Message], content: str) -> None:
+        """把助手消息写入会话历史。"""
+
+        history.append({"role": "assistant", "content": content})
+
+    def _build_fallback_result(
+        self,
+        session_id: str,
+        user_input: str,
+        history: list[Message],
+        steps: list[ReactStep],
+        raw_messages: list[Message],
+    ) -> AgentResult:
+        """构造统一的兜底返回。"""
+
+        self._store_assistant_message(history, FALLBACK_REPLY)
+        self._trim_history(session_id)
+        return AgentResult(
+            session_id=session_id,
+            user_input=user_input,
+            reply=FALLBACK_REPLY,
+            steps=steps,
+            raw_messages=list(raw_messages) + [{"role": "assistant", "content": FALLBACK_REPLY}],
+        )
+
+    def _ensure_session(self, session_id: str) -> None:
+        """按需初始化会话。"""
+
+        if session_id not in self._session_histories:
+            self.create_session(session_id)
+
+    def _trim_history(self, session_id: str, max_turns: int = MAX_HISTORY_TURNS) -> None:
+        """裁剪会话历史，避免上下文无限增长。"""
+
+        history = self._session_histories.get(session_id)
+        if history and len(history) > max_turns:
+            self._session_histories[session_id] = history[-max_turns:]
+
+    @staticmethod
+    def _validate_session_id(session_id: str) -> str:
+        """校验会话 ID。"""
+
+        normalized_session_id = session_id.strip()
+        if not normalized_session_id:
+            raise ValueError("session_id 不能为空。")
+        return normalized_session_id
+
+    @staticmethod
+    def _validate_user_input(user_input: str) -> str:
+        """校验用户输入。"""
+
+        normalized_user_input = user_input.strip()
+        if not normalized_user_input:
+            raise ValueError("user_input 不能为空。")
+        return normalized_user_input

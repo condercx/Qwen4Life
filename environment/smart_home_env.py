@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import time
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
@@ -15,8 +14,9 @@ from environment.actions import (
     build_success_response,
     parse_step_request,
 )
+from environment.clock import Clock, SystemClock
 from environment.devices import Device
-from environment.scenarios import build_default_devices
+from environment.scenarios import DeviceFactory, build_default_devices
 
 
 @dataclass(slots=True)
@@ -25,7 +25,7 @@ class SessionState:
 
     session_id: str
     devices: dict[str, Device]
-    created_at: float = field(default_factory=time.time)
+    created_at: float
     last_user_intent: str | None = None
     state_cache: dict[str, Any] = field(default_factory=dict)
     history: list[dict[str, Any]] = field(default_factory=list)
@@ -73,17 +73,25 @@ class SessionState:
 class SmartHomeEnv:
     """提供 `reset`、`step`、`get_state` 和 `get_events` 四个基础接口。"""
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        clock: Clock | None = None,
+        device_factory: DeviceFactory = build_default_devices,
+    ) -> None:
+        # 注入时间源后，带计时逻辑的设备状态流转可以在测试中保持确定性。
+        self.clock = clock or SystemClock()
+        # 设备工厂必须返回新设备实例，避免不同会话共享可变状态。
+        self.device_factory = device_factory
         self.sessions: dict[str, SessionState] = {}
 
     def reset(self, session_id: str) -> dict[str, Any]:
         """重置会话并返回初始观测。"""
 
         normalized_session_id = _normalize_session_id(session_id)
-        current_time = time.time()
+        current_time = self.clock.now()
         state = SessionState(
             session_id=normalized_session_id,
-            devices=build_default_devices(),
+            devices=self.device_factory(),
             created_at=current_time,
         )
         self.sessions[normalized_session_id] = state
@@ -102,7 +110,7 @@ class SmartHomeEnv:
         try:
             parsed = parse_step_request(request)
             state = self.sessions.get(parsed.session_id) or self._create_session(parsed.session_id)
-            current_time = time.time()
+            current_time = self.clock.now()
 
             generated_events = self._sync_timed_devices(state, current_time)
             state.last_user_intent = parsed.intent
@@ -148,7 +156,7 @@ class SmartHomeEnv:
         except ProtocolError as error:
             observation: dict[str, Any] = {}
             if session_id in self.sessions:
-                current_time = time.time()
+                current_time = self.clock.now()
                 state = self.sessions[session_id]
                 self._sync_timed_devices(state, current_time)
                 observation = state.observation(current_time)
@@ -158,7 +166,7 @@ class SmartHomeEnv:
         """获取当前会话状态。"""
 
         state = self._require_session(session_id)
-        current_time = time.time()
+        current_time = self.clock.now()
         self._sync_timed_devices(state, current_time)
         return state.observation(current_time)
 
@@ -166,7 +174,7 @@ class SmartHomeEnv:
         """获取并清空当前会话的未读事件。"""
 
         state = self._require_session(session_id)
-        current_time = time.time()
+        current_time = self.clock.now()
         self._sync_timed_devices(state, current_time)
         return state.drain_events()
 

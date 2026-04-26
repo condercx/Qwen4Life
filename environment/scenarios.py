@@ -1,14 +1,26 @@
-"""默认场景与演示请求构造器。"""
+"""测试和模拟复用的环境设备 fixture。"""
 
 from __future__ import annotations
 
-from typing import Any
+from collections.abc import Callable
+from typing import TypeVar
 
-from environment.devices import AirConditioner, Device, Light, WashingMachine
+from environment.devices import (
+    AirConditioner,
+    Curtain,
+    Device,
+    Light,
+    SmartPlug,
+    TemperatureHumiditySensor,
+    WashingMachine,
+)
+
+DeviceFactory = Callable[[], dict[str, Device]]
+DeviceT = TypeVar("DeviceT", bound=Device)
 
 
 def build_default_devices() -> dict[str, Device]:
-    """构造默认设备集合。"""
+    """构造新会话默认使用的基础设备集合。"""
 
     light = Light(
         device_id="living_room_light_1",
@@ -25,146 +37,126 @@ def build_default_devices() -> dict[str, Device]:
         device_type="washing_machine",
         name="阳台洗衣机",
     )
+    curtain = Curtain(
+        device_id="living_room_curtain_1",
+        device_type="curtain",
+        name="客厅窗帘",
+    )
+    sensor = TemperatureHumiditySensor(
+        device_id="living_room_sensor_1",
+        device_type="temperature_humidity_sensor",
+        name="客厅温湿度传感器",
+    )
+    smart_plug = SmartPlug(
+        device_id="desk_plug_1",
+        device_type="smart_plug",
+        name="书房插座",
+    )
     return {
         light.device_id: light,
         air_conditioner.device_id: air_conditioner,
         washing_machine.device_id: washing_machine,
+        curtain.device_id: curtain,
+        sensor.device_id: sensor,
+        smart_plug.device_id: smart_plug,
     }
 
 
-def build_discrete_demo_requests(session_id: str) -> list[dict[str, Any]]:
-    """构造离散控制演示请求。"""
+def build_evening_home_devices() -> dict[str, Device]:
+    """构造晚间到家场景的设备 fixture。"""
 
-    return [
-        _build_step_request(
-            request_id="demo-discrete-1",
-            session_id=session_id,
-            intent="打开客厅的灯",
-            device="light",
-            target="living_room_light_1",
-            command="turn_on",
-        ),
-        _build_step_request(
-            request_id="demo-discrete-2",
-            session_id=session_id,
-            intent="把客厅灯调到 60 亮度",
-            device="light",
-            target="living_room_light_1",
-            command="set_brightness",
-            params={"brightness": 60},
-        ),
-        _build_step_request(
-            request_id="demo-discrete-3",
-            session_id=session_id,
-            intent="把空调设成制冷",
-            device="ac",
-            target="living_room_ac_1",
-            command="set_mode",
-            params={"mode": "cool"},
-        ),
-        _build_step_request(
-            request_id="demo-discrete-4",
-            session_id=session_id,
-            intent="把空调调到 24 度",
-            device="ac",
-            target="living_room_ac_1",
-            command="set_temperature",
-            params={"temperature": 24.0},
-        ),
-    ]
+    devices = build_default_devices()
+    light = _require_device(devices, "living_room_light_1", Light)
+    air_conditioner = _require_device(devices, "living_room_ac_1", AirConditioner)
+    curtain = _require_device(devices, "living_room_curtain_1", Curtain)
+    sensor = _require_device(devices, "living_room_sensor_1", TemperatureHumiditySensor)
+
+    light.is_on = True
+    light.brightness = 60
+    air_conditioner.is_on = True
+    air_conditioner.mode = "cool"
+    air_conditioner.target_temperature = 24.0
+    curtain.position_percent = 35
+    sensor.temperature = 26.0
+    sensor.humidity = 50.0
+    return devices
 
 
-def build_timed_demo_requests(session_id: str) -> list[dict[str, Any]]:
-    """构造计时任务演示请求。"""
+def build_all_offline_devices() -> dict[str, Device]:
+    """构造所有已知设备均离线的 fixture。"""
 
-    return [
-        _build_step_request(
-            request_id="demo-timed-1",
-            session_id=session_id,
-            intent="开始标准洗衣",
-            device="washing_machine",
-            target="washing_machine_1",
-            command="start_wash",
-            params={"program": "standard", "duration_seconds": 6},
-        ),
-        {"kind": "wait", "seconds": 2, "label": "等待 2 秒，模拟后台计时"},
-        {"kind": "poll", "label": "2 秒后查询洗衣机状态"},
-        _build_step_request(
-            request_id="demo-timed-2",
-            session_id=session_id,
-            intent="洗衣过程中打开客厅灯",
-            device="light",
-            target="living_room_light_1",
-            command="turn_on",
-        ),
-        {"kind": "wait", "seconds": 5, "label": "再等待 5 秒，观察洗衣完成"},
-        {"kind": "poll", "label": "洗衣完成后查询状态"},
-    ]
+    devices = build_default_devices()
+    for device in devices.values():
+        device.online = False
+    return devices
 
 
-def build_mixed_demo_requests(session_id: str) -> list[dict[str, Any]]:
-    """构造多设备联动演示请求。"""
+def build_washing_running_devices(
+    current_time: float = 0.0,
+    duration_seconds: int = 300,
+    program: str = "standard",
+) -> dict[str, Device]:
+    """构造洗衣机已经运行中的 fixture。"""
 
-    return [
-        _build_step_request(
-            request_id="demo-mixed-1",
-            session_id=session_id,
-            intent="我到家了，帮我准备客厅",
-            device="light",
-            target="living_room_light_1",
-            command="turn_on",
-        ),
-        _build_step_request(
-            request_id="demo-mixed-2",
-            session_id=session_id,
-            intent="把空调设成制冷",
-            device="ac",
-            target="living_room_ac_1",
-            command="set_mode",
-            params={"mode": "cool"},
-        ),
-        _build_step_request(
-            request_id="demo-mixed-3",
-            session_id=session_id,
-            intent="继续把空调调到 24 度",
-            device="ac",
-            target="living_room_ac_1",
-            command="set_temperature",
-            params={"temperature": 24.0},
-        ),
-        _build_step_request(
-            request_id="demo-mixed-4",
-            session_id=session_id,
-            intent="顺便开始洗衣服",
-            device="washing_machine",
-            target="washing_machine_1",
-            command="start_wash",
-            params={"program": "quick", "duration_seconds": 8},
-        ),
-        {"kind": "wait", "seconds": 3, "label": "等待 3 秒，查看洗衣剩余时间"},
-        {"kind": "poll", "label": "混合场景中间状态"},
-    ]
+    devices = build_default_devices()
+    washing_machine = _require_device(devices, "washing_machine_1", WashingMachine)
+    washing_machine.status = "running"
+    washing_machine.program = program
+    washing_machine.duration_seconds = duration_seconds
+    washing_machine.remaining_seconds = duration_seconds
+    washing_machine.started_at = current_time
+    washing_machine.expected_finish_at = current_time + duration_seconds
+    washing_machine.paused_at = None
+    washing_machine.completed_at = None
+    return devices
 
 
-def _build_step_request(
-    request_id: str,
-    session_id: str,
-    intent: str,
-    device: str,
-    target: str,
-    command: str,
-    params: dict[str, Any] | None = None,
-) -> dict[str, Any]:
-    """构造统一格式的环境请求。"""
+def build_washing_paused_devices(
+    current_time: float = 300.0,
+    remaining_seconds: int = 120,
+    duration_seconds: int = 300,
+    program: str = "standard",
+) -> dict[str, Device]:
+    """构造洗衣机在中途暂停的 fixture。"""
 
-    return {
-        "request_id": request_id,
-        "session_id": session_id,
-        "intent": intent,
-        "action": {
-            "device": device,
-            "target": target,
-            "command": command,
-            "params": params or {},
-        },
-    }
+    devices = build_default_devices()
+    washing_machine = _require_device(devices, "washing_machine_1", WashingMachine)
+    elapsed_seconds = max(0, duration_seconds - remaining_seconds)
+    washing_machine.status = "paused"
+    washing_machine.program = program
+    washing_machine.duration_seconds = duration_seconds
+    washing_machine.remaining_seconds = remaining_seconds
+    # Windows 上负 Unix 时间戳可能无法序列化，因此这里保证生成的时间戳非负。
+    washing_machine.started_at = max(0.0, current_time - elapsed_seconds)
+    washing_machine.expected_finish_at = None
+    washing_machine.paused_at = current_time
+    washing_machine.completed_at = None
+    return devices
+
+
+DEVICE_FIXTURES: dict[str, DeviceFactory] = {
+    "default": build_default_devices,
+    "evening_home": build_evening_home_devices,
+    "all_offline": build_all_offline_devices,
+    "washing_running": build_washing_running_devices,
+    "washing_paused": build_washing_paused_devices,
+}
+
+
+def get_device_fixture_names() -> list[str]:
+    """返回已注册的 fixture 名称，供测试和诊断使用。"""
+
+    return list(DEVICE_FIXTURES)
+
+
+def _require_device(
+    devices: dict[str, Device],
+    device_id: str,
+    expected_type: type[DeviceT],
+) -> DeviceT:
+    """返回带类型的 fixture 设备；fixture 配置错误时尽早失败。"""
+
+    device = devices[device_id]
+    if not isinstance(device, expected_type):
+        raise TypeError(f"{device_id} 必须是 {expected_type.__name__}。")
+    return device

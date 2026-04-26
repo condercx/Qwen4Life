@@ -6,13 +6,15 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
-from environment.remote_adapter import RemoteEnvironmentAdapter
+from environment.adapter import EnvironmentAdapter
 
-DEVICE_TYPE_ALIASES = {
-    "light": "light",
-    "ac": "ac",
-    "washing_machine": "washing_machine",
-}
+
+def _create_default_adapter() -> EnvironmentAdapter:
+    """仅在注册表需要默认实现时创建生产 HTTP 适配器。"""
+
+    from environment.remote_adapter import RemoteEnvironmentAdapter
+
+    return RemoteEnvironmentAdapter()
 
 
 @dataclass(slots=True)
@@ -28,7 +30,7 @@ class ToolDefinition:
 class ToolRegistry:
     """管理 Agent 工具注册、描述和执行。"""
 
-    adapter: RemoteEnvironmentAdapter = field(default_factory=RemoteEnvironmentAdapter)
+    adapter: EnvironmentAdapter = field(default_factory=_create_default_adapter)
     _tools: dict[str, Callable[..., str]] = field(default_factory=dict, init=False)
     _definitions: list[ToolDefinition] = field(default_factory=list, init=False)
 
@@ -155,14 +157,20 @@ class ToolRegistry:
 
     @staticmethod
     def _infer_device_type(device_id: str) -> str:
-        """根据设备 ID 推断设备类型。"""
+        """根据设备 ID 推断环境协议中的设备类型。"""
 
         if "light" in device_id:
-            return DEVICE_TYPE_ALIASES["light"]
+            return "light"
         if "ac" in device_id:
-            return DEVICE_TYPE_ALIASES["ac"]
+            return "ac"
         if "washing" in device_id:
-            return DEVICE_TYPE_ALIASES["washing_machine"]
+            return "washing_machine"
+        if "curtain" in device_id:
+            return "curtain"
+        if "sensor" in device_id:
+            return "temperature_humidity_sensor"
+        if "plug" in device_id:
+            return "smart_plug"
         return "unknown"
 
     def _describe_device(self, device_id: str, device: dict[str, Any]) -> str:
@@ -199,6 +207,26 @@ class ToolRegistry:
             if remaining_seconds > 0:
                 description += f"，剩余时间={self._format_duration(remaining_seconds)}"
             return description
+
+        if device_type == "curtain":
+            position_percent = int(device.get("position_percent", 0) or 0)
+            if position_percent == 0:
+                state = "关闭"
+            elif position_percent == 100:
+                state = "完全打开"
+            else:
+                state = "部分打开"
+            return f"[{name}] 状态：{state}，开合度={position_percent}%"
+
+        if device_type == "temperature_humidity_sensor":
+            temperature = device.get("temperature", "未知")
+            humidity = device.get("humidity", "未知")
+            return f"[{name}] 温度={temperature}°C，湿度={humidity}%"
+
+        if device_type == "smart_plug":
+            state = "开启" if device.get("is_on") else "关闭"
+            power_watts = device.get("power_watts", 0.0)
+            return f"[{name}] 状态：{state}，功率={power_watts}W"
 
         return f"[{name}] 类型={device_type}，状态未知"
 

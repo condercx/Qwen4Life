@@ -61,15 +61,12 @@ def execute_action(session_id: str, request: ActionRequest) -> dict[str, Any]:
     """执行一次环境动作。"""
 
     request_id = request.request_id or f"{session_id}-req-{next(REQUEST_COUNTER)}"
-    action_info = request.action
-    command = str(action_info.get("command", action_info.get("name", "unknown")))
-    target = str(action_info.get("target", "unknown"))
-    params = action_info.get("params", action_info.get("args", {}))
+    action_info = _normalize_action_payload(request.action)
     logger.info(
         "收到动作：command=%s, target=%s, params=%s, request_id=%s",
-        command,
-        target,
-        params,
+        action_info["command"],
+        action_info["target"],
+        action_info["params"],
         request_id,
     )
 
@@ -86,6 +83,17 @@ def execute_action(session_id: str, request: ActionRequest) -> dict[str, Any]:
     except Exception as exc:
         logger.exception("动作执行异常：request_id=%s", request_id)
         raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+def _normalize_action_payload(action: dict[str, Any]) -> dict[str, Any]:
+    """把 HTTP 层动作请求归一化为环境 step 协议需要的结构。"""
+
+    return {
+        "device": str(action.get("device", "unknown")),
+        "target": str(action.get("target", "unknown")),
+        "command": str(action.get("command", action.get("name", "unknown"))),
+        "params": action.get("params", action.get("args", {})),
+    }
 
 
 if __name__ == "__main__":

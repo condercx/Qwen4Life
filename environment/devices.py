@@ -180,6 +180,131 @@ class AirConditioner(Device):
 
 
 @dataclass(slots=True)
+class Curtain(Device):
+    """窗帘设备，支持开合和开合百分比设置。"""
+
+    position_percent: int = 0
+
+    def handle_command(
+        self,
+        command: str,
+        params: dict[str, Any],
+        current_time: float,
+    ) -> list[dict[str, Any]]:
+        """处理窗帘命令。"""
+
+        del current_time
+        self.ensure_online()
+
+        match command:
+            case "open":
+                self.position_percent = 100
+            case "close":
+                self.position_percent = 0
+            case "set_position":
+                self.position_percent = _require_int_in_range(params, "position_percent", 0, 100)
+            case _:
+                raise ProtocolError(ERROR_UNSUPPORTED_COMMAND, f"窗帘不支持命令 `{command}`。")
+
+        return [
+            {
+                "type": "curtain_position_changed",
+                "source": self.device_id,
+                "payload": {"position_percent": self.position_percent},
+            }
+        ]
+
+    def snapshot(self) -> dict[str, Any]:
+        """返回窗帘设备快照。"""
+
+        return {
+            **Device.snapshot(self),
+            "position_percent": self.position_percent,
+        }
+
+
+@dataclass(slots=True)
+class TemperatureHumiditySensor(Device):
+    """温湿度传感器，只支持状态查询，不支持控制命令。"""
+
+    temperature: float = 25.0
+    humidity: float = 45.0
+
+    def handle_command(
+        self,
+        command: str,
+        params: dict[str, Any],
+        current_time: float,
+    ) -> list[dict[str, Any]]:
+        """拒绝传感器控制命令，并保持离线错误优先级一致。"""
+
+        del params, current_time
+        self.ensure_online()
+        raise ProtocolError(ERROR_UNSUPPORTED_COMMAND, f"温湿度传感器不支持命令 `{command}`。")
+
+    def snapshot(self) -> dict[str, Any]:
+        """返回温湿度传感器快照。"""
+
+        return {
+            **Device.snapshot(self),
+            "temperature": self.temperature,
+            "humidity": self.humidity,
+        }
+
+
+@dataclass(slots=True)
+class SmartPlug(Device):
+    """智能插座设备，支持开关控制和功率读数。"""
+
+    is_on: bool = False
+    power_watts: float = 0.0
+
+    def handle_command(
+        self,
+        command: str,
+        params: dict[str, Any],
+        current_time: float,
+    ) -> list[dict[str, Any]]:
+        """处理智能插座命令。"""
+
+        del current_time
+        self.ensure_online()
+
+        match command:
+            case "turn_on":
+                self.is_on = True
+                if "power_watts" in params:
+                    self.power_watts = round(
+                        _require_float_in_range(params, "power_watts", 0.0, 3000.0),
+                        1,
+                    )
+                elif self.power_watts <= 0:
+                    self.power_watts = 5.0
+            case "turn_off":
+                self.is_on = False
+                self.power_watts = 0.0
+            case _:
+                raise ProtocolError(ERROR_UNSUPPORTED_COMMAND, f"智能插座不支持命令 `{command}`。")
+
+        return [
+            {
+                "type": "plug_state_changed",
+                "source": self.device_id,
+                "payload": {"is_on": self.is_on, "power_watts": self.power_watts},
+            }
+        ]
+
+    def snapshot(self) -> dict[str, Any]:
+        """返回智能插座设备快照。"""
+
+        return {
+            **Device.snapshot(self),
+            "is_on": self.is_on,
+            "power_watts": self.power_watts,
+        }
+
+
+@dataclass(slots=True)
 class WashingMachine(Device):
     """洗衣机设备，支持定时推进与状态流转。"""
 

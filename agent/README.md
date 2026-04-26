@@ -22,12 +22,37 @@
 
 ## 当前工具
 
-目前只注册了两个内置工具：
+目前注册了两个通用内置工具：
 
-- `query_all_devices()`：查询所有设备状态。
-- `control_device(device_id, command, params)`：控制指定设备。
+- `query_all_devices()`：查询所有设备状态，包括灯光、空调、洗衣机、窗帘、传感器和智能插座。
+- `control_device(device_id, command, params)`：控制指定设备；传感器属于只读设备，只能查询状态。
 
 这两个工具都会通过 `environment.remote_adapter.RemoteEnvironmentAdapter` 调用环境服务。
+
+单元测试可以把 `ToolRegistry` 的 `adapter` 换成 `environment.adapter.InMemoryEnvironmentAdapter`，直接调用内存中的 `SmartHomeEnv`。这样测试 Agent 工具和控制器时不需要启动 FastAPI 环境服务。
+
+```python
+from agent.tools import ToolRegistry
+from environment.adapter import InMemoryEnvironmentAdapter
+from environment.scenarios import build_evening_home_devices
+from environment.smart_home_env import SmartHomeEnv
+
+env = SmartHomeEnv(device_factory=build_evening_home_devices)
+tools = ToolRegistry(adapter=InMemoryEnvironmentAdapter(env=env))
+tools.adapter.create_session("test-session")
+```
+
+`agent` 包的顶层导出和 `ToolRegistry` 默认 HTTP adapter 都使用懒加载，导入 `agent.tools` 时不会提前加载模型客户端或 HTTP 客户端。
+
+## 测试
+
+Agent 工具层测试位于 `tests/agent_tests/`，使用标准库 `unittest`：
+
+```bash
+python -m unittest discover -s tests
+```
+
+当前测试通过 `InMemoryEnvironmentAdapter` 验证工具查询、通用设备控制、新增设备控制和错误返回，并用假模型客户端验证控制器的直接回答、工具调用后回答、流式工具调用和异常兜底，不需要启动环境服务或模型服务。
 
 ## 模型配置
 
@@ -92,6 +117,5 @@ ollama run qwen3.5:4b
 
 ## 当前限制
 
-- 当前工具数量较少，只覆盖最小智能家居场景。
+- 当前工具仍是查询和控制两个通用入口，尚未拆分成设备专用工具。
 - 仍依赖外部模型服务，仓库不包含模型本体。
-- 目前没有独立测试目录。

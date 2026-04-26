@@ -44,6 +44,9 @@ Answer: 你的自然语言回复
 | 客厅主灯 | living_room_light_1 | 支持开关和亮度调节 |
 | 客厅空调 | living_room_ac_1 | 支持模式、温度和风速控制 |
 | 阳台洗衣机 | washing_machine_1 | 支持启动、暂停、继续和取消 |
+| 客厅窗帘 | living_room_curtain_1 | 支持打开、关闭和开合度设置 |
+| 客厅温湿度传感器 | living_room_sensor_1 | 只支持状态查询 |
+| 书房插座 | desk_plug_1 | 支持开关和功率读数 |
 
 ## 设备命令
 
@@ -64,6 +67,18 @@ Answer: 你的自然语言回复
 - pause：暂停
 - resume：继续
 - cancel：取消
+
+窗帘（curtain）：
+- open：完全打开
+- close：关闭
+- set_position：设置开合度，参数 position_percent，范围 0-100
+
+温湿度传感器（temperature_humidity_sensor）：
+- 只支持查询状态，不支持控制命令
+
+智能插座（smart_plug）：
+- turn_on：打开插座，可选参数 power_watts，范围 0-3000
+- turn_off：关闭插座
 
 ## 行为准则
 

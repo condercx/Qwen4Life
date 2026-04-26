@@ -7,16 +7,16 @@ Qwen4Life 是一个面向智能家居场景的最小可运行 Agent + Environmen
 - `environment/`：模拟智能家居环境，负责设备状态、动作执行、事件流转和 HTTP 服务。
 - `agent/`：实现基于 ReAct 的智能家居 Agent，负责理解用户输入、决定是否调用工具，并把结果整理成自然语言回复。
 
-根目录 `README.md` 以当前代码为准。`agent/README.md` 和 `environment/README.md` 仍有历史内容和乱码，暂不作为最新说明。
+根目录 `README.md`、`agent/README.md` 和 `environment/README.md` 均按当前代码同步维护。
 
 ## 当前功能
 
-- 提供 3 类默认设备：客厅主灯、客厅空调、阳台洗衣机。
+- 提供 6 类默认设备：灯光、空调、洗衣机、窗帘、温湿度传感器、智能插座。
 - 支持设备控制、状态查询和事件读取。
 - 支持洗衣机这类带时间推进的设备任务。
 - 提供独立的 FastAPI 环境服务，Agent 通过 HTTP 调用环境。
 - 提供命令行 Agent demo，支持单轮模式和交互模式。
-- 提供环境演示脚本，可直接跑离散控制、计时任务和混合联动示例。
+- 环境核心支持内存适配器和可控时间，便于编写不依赖服务进程的单元测试。
 
 ## 项目结构
 
@@ -35,15 +35,17 @@ Qwen4Life
 ├── environment
 │   ├── __init__.py
 │   ├── actions.py
-│   ├── demo.py
-│   ├── demo_catalog.py
-│   ├── demo_output.py
-│   ├── demo_runner.py
+│   ├── adapter.py
+│   ├── clock.py
 │   ├── devices.py
 │   ├── remote_adapter.py
 │   ├── scenarios.py
 │   ├── server.py
 │   └── smart_home_env.py
+├── tests
+│   ├── agent_tests
+│   ├── environment_tests
+│   └── README.md
 ├── requirements.txt
 └── README.md
 ```
@@ -53,12 +55,13 @@ Qwen4Life
 ### `environment/`
 
 - `actions.py`：定义环境动作协议、请求校验和统一错误响应。
-- `devices.py`：定义灯光、空调、洗衣机等设备模型及其命令处理逻辑。
-- `scenarios.py`：构造默认设备和 demo 请求序列。
+- `adapter.py`：定义 Agent 访问环境的适配器协议，并提供单元测试用的内存适配器。
+- `clock.py`：定义环境时间源，生产环境使用真实时间，测试可注入可控时间。
+- `devices.py`：定义灯光、空调、洗衣机、窗帘、传感器、智能插座等设备模型及其命令处理逻辑。
+- `scenarios.py`：构造可复用设备 fixture，并提供 fixture 注册表。
 - `smart_home_env.py`：环境核心，负责会话管理、状态观测、事件派发和 `step()` 执行。
 - `server.py`：暴露 FastAPI 服务。
 - `remote_adapter.py`：给 Agent 用的 HTTP 适配层。
-- `demo.py`、`demo_runner.py`、`demo_output.py`：环境演示脚本和日志输出。
 
 ### `agent/`
 
@@ -69,6 +72,12 @@ Qwen4Life
 - `tools.py`：注册并执行 Agent 工具，当前包含设备查询和设备控制。
 - `prompts.py`：系统提示词模板。
 - `demo.py`：Agent 命令行入口。
+
+### `tests/`
+
+- `environment_tests/`：覆盖设备 fixture、环境状态流转、可控时间、错误响应和 FastAPI 服务边界。
+- `agent_tests/`：覆盖 Agent 工具层、控制器和内存环境适配器的集成。
+- `README.md`：记录测试运行方式和测试边界。
 
 ## 依赖
 
@@ -88,7 +97,7 @@ pip install -r requirements.txt
 
 说明：
 
-- `agent/requirements.txt` 和 `environment/requirements.txt` 是历史文件，当前实际依赖以根目录 `requirements.txt` 为准。
+- 当前实际依赖以根目录 `requirements.txt` 为准。
 - 如果要运行 Agent 并连接模型，还需要本地准备一个兼容 OpenAI `/v1/chat/completions` 的模型服务，例如 Ollama。
 
 ## 运行方式
@@ -147,28 +156,6 @@ python agent/demo.py -v
 python agent/demo.py "帮我打开客厅灯"
 ```
 
-### 4. 查看环境 demo
-
-列出可用 demo：
-
-```bash
-python environment/demo.py --list
-```
-
-运行全部 demo：
-
-```bash
-python environment/demo.py
-```
-
-只运行指定 demo：
-
-```bash
-python environment/demo.py --demo discrete
-python environment/demo.py --demo timed
-python environment/demo.py --demo mixed
-```
-
 ## 环境 HTTP 接口
 
 环境服务当前提供以下接口：
@@ -193,6 +180,17 @@ python environment/demo.py --demo mixed
 }
 ```
 
+HTTP 动作接口也兼容 `name` / `args` 别名，服务层会归一化为环境核心使用的 `command` / `params`。
+
+## 默认设备
+
+- `living_room_light_1`：客厅主灯，支持开关和亮度调节。
+- `living_room_ac_1`：客厅空调，支持模式、温度和风速控制。
+- `washing_machine_1`：阳台洗衣机，支持启动、暂停、继续和取消。
+- `living_room_curtain_1`：客厅窗帘，支持打开、关闭和开合度设置。
+- `living_room_sensor_1`：客厅温湿度传感器，只支持状态查询。
+- `desk_plug_1`：书房插座，支持开关和功率读数。
+
 ## Agent 工具
 
 当前 Agent 内置 2 个工具：
@@ -202,26 +200,67 @@ python environment/demo.py --demo mixed
 
 工具最终都通过 `environment.remote_adapter.RemoteEnvironmentAdapter` 转发到环境服务。
 
-## 已验证内容
+单元测试可以改用 `environment.adapter.InMemoryEnvironmentAdapter`，直接调用 `SmartHomeEnv`，不需要启动环境 HTTP 服务：
 
-当前代码已做过以下基础验证：
+```python
+from agent.tools import ToolRegistry
+from environment.adapter import InMemoryEnvironmentAdapter
+from environment.clock import FakeClock
+from environment.scenarios import build_evening_home_devices
+from environment.smart_home_env import SmartHomeEnv
 
-- `python -m compileall agent environment`
-- `python environment/demo.py --list`
+clock = FakeClock(current_time=1_700_000_000)
+env = SmartHomeEnv(clock=clock, device_factory=build_evening_home_devices)
+tools = ToolRegistry(adapter=InMemoryEnvironmentAdapter(env=env))
+tools.adapter.create_session("test-session")
+result = tools.execute("test-session", "query_all_devices", {})
+```
+
+## 测试时间控制
+
+环境核心支持注入 `environment.clock.FakeClock`，用于单元测试中推进洗衣机等计时设备，不需要真实 `sleep`：
+
+```python
+from environment.clock import FakeClock
+from environment.smart_home_env import SmartHomeEnv
+
+clock = FakeClock(current_time=1_700_000_000)
+env = SmartHomeEnv(clock=clock)
+env.reset("test-session")
+clock.advance(10)
+```
+
+## 测试设备场景
+
+`environment.scenarios` 当前提供 `default`、`evening_home`、`all_offline`、`washing_running`、`washing_paused` 五类设备 fixture。可以通过 `SmartHomeEnv(device_factory=...)` 注入，供 agent 工具和控制器单测复用。
+
+## 测试
+
+当前测试使用 Python 标准库 `unittest`，不需要新增第三方测试依赖。
+
+```bash
+python -m unittest discover -s tests
+```
+
+这些测试不会启动 uvicorn 进程，也不会连接模型服务；HTTP 服务边界通过 FastAPI `TestClient` 在进程内验证，Agent 控制器测试使用假模型客户端驱动非流式和流式 ReAct 输出。
+
+## 本地验证
+
+修改环境或 Agent 后建议运行以下命令，确保语法、设备行为、HTTP 边界和 Agent 工具链保持一致：
+
+- `python -m compileall environment agent tests`
+- `python -m unittest discover -s tests`
 - `python agent/demo.py --help`
-- 环境层 `reset -> step -> state` 的基本 smoke test
-- `agent.parser.parse_react_output()` 的动作解析基本校验
+
+当前测试覆盖环境层 `reset -> step -> state`、新增设备模型、FastAPI 服务边界、`InMemoryEnvironmentAdapter` 工具调用，以及 `SimpleSmartHomeAgent` 的 fake LLM 非流式和流式控制器路径。
 
 ## 当前限制
 
-- 目前没有正式测试目录，只有基础手工验证。
 - Agent 仍依赖外部模型服务，仓库本身不包含模型权重。
-- `agent/README.md` 和 `environment/README.md` 还没有同步清理。
-- 当前工具较少，主要覆盖最小智能家居场景。
+- 当前 Agent 仍只暴露查询和控制两个通用工具，尚未拆分成更细粒度的设备专用工具。
 
 ## 后续建议
 
-- 补充 `tests/`，把环境协议、设备状态流转和 Agent 解析逻辑覆盖起来。
-- 清理子目录 README，避免和根文档不一致。
+- 继续扩展 `tests/`，覆盖更多异常输入和端到端 Agent 场景。
 - 为 Agent 增加更多工具和更细粒度的设备语义。
 - 为环境服务补充健康检查和更完整的 API 文档示例。

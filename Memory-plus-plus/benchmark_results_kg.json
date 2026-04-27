@@ -1,0 +1,25 @@
+{
+  "longmemeval": {
+    "benchmark": "LongMemEval-S (Memory++)",
+    "n_questions": 30,
+    "question_types": [
+      "multi-session"
+    ],
+    "overall": {
+      "token_f1_mean": 0.2762,
+      "token_f1_p50": 0.0,
+      "exact_match": 0.2,
+      "retrieval_recall_mean": 0.9897,
+      "e2e_latency_p50_s": 46.91,
+      "e2e_latency_p95_s": 57.97,
+      "token_usage_mean": 10379.4
+    },
+    "by_type": {
+      "multi-session": {
+        "n": 30,
+        "token_f1": 0.2762,
+        "exact_match": 0.2
+      }
+    }
+  }
+}

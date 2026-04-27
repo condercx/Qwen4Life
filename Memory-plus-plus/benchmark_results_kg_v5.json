@@ -1,0 +1,91 @@
+{
+  "longmemeval": {
+    "benchmark": "LongMemEval-S (Memory++)",
+    "n_questions": 500,
+    "question_types": [
+      "single-session-assistant",
+      "knowledge-update",
+      "single-session-user",
+      "single-session-preference",
+      "temporal-reasoning",
+      "multi-session"
+    ],
+    "overall": {
+      "token_f1_mean": 0.3605,
+      "token_f1_p50": 0.1818,
+      "exact_match": 0.208,
+      "retrieval_recall_mean": 0.9506,
+      "e2e_latency_p50_s": 26.8,
+      "e2e_latency_p95_s": 30.41,
+      "token_usage_mean": 2992.9
+    },
+    "by_type": {
+      "single-session-user": {
+        "n": 70,
+        "token_f1": 0.746,
+        "exact_match": 0.5857
+      },
+      "multi-session": {
+        "n": 133,
+        "token_f1": 0.2156,
+        "exact_match": 0.0977
+      },
+      "single-session-preference": {
+        "n": 30,
+        "token_f1": 0.0377,
+        "exact_match": 0.0
+      },
+      "temporal-reasoning": {
+        "n": 133,
+        "token_f1": 0.2549,
+        "exact_match": 0.0677
+      },
+      "knowledge-update": {
+        "n": 78,
+        "token_f1": 0.4159,
+        "exact_match": 0.2564
+      },
+      "single-session-assistant": {
+        "n": 56,
+        "token_f1": 0.5694,
+        "exact_match": 0.375
+      }
+    }
+  },
+  "locomo": {
+    "benchmark": "LoCoMo (Memory++)",
+    "n_questions": 500,
+    "overall": {
+      "token_f1_mean": 0.3616,
+      "exact_match": 0.15,
+      "e2e_latency_p50_s": 3.98
+    },
+    "by_category": {
+      "multi-hop": {
+        "n": 91,
+        "token_f1": 0.3726,
+        "exact_match": 0.044
+      },
+      "temporal": {
+        "n": 22,
+        "token_f1": 0.0583,
+        "exact_match": 0.0
+      },
+      "single-hop": {
+        "n": 75,
+        "token_f1": 0.3172,
+        "exact_match": 0.0533
+      },
+      "open-domain": {
+        "n": 200,
+        "token_f1": 0.4799,
+        "exact_match": 0.28
+      },
+      "adversarial": {
+        "n": 112,
+        "token_f1": 0.2307,
+        "exact_match": 0.0982
+      }
+    }
+  }
+}

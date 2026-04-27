@@ -1,0 +1,91 @@
+{
+  "longmemeval": {
+    "benchmark": "LongMemEval-S",
+    "n_questions": 500,
+    "question_types": [
+      "knowledge-update",
+      "single-session-user",
+      "temporal-reasoning",
+      "single-session-preference",
+      "multi-session",
+      "single-session-assistant"
+    ],
+    "overall": {
+      "token_f1_mean": 0.1471,
+      "token_f1_p50": 0.0494,
+      "exact_match": 0.01,
+      "retrieval_recall_mean": 0.8581,
+      "e2e_latency_p50_s": 26.74,
+      "e2e_latency_p95_s": 31.99,
+      "token_usage_mean": 983.0
+    },
+    "by_type": {
+      "single-session-user": {
+        "n": 70,
+        "token_f1": 0.2528,
+        "exact_match": 0.0
+      },
+      "multi-session": {
+        "n": 133,
+        "token_f1": 0.052,
+        "exact_match": 0.0
+      },
+      "single-session-preference": {
+        "n": 30,
+        "token_f1": 0.0529,
+        "exact_match": 0.0
+      },
+      "temporal-reasoning": {
+        "n": 133,
+        "token_f1": 0.1157,
+        "exact_match": 0.0
+      },
+      "knowledge-update": {
+        "n": 78,
+        "token_f1": 0.169,
+        "exact_match": 0.0128
+      },
+      "single-session-assistant": {
+        "n": 56,
+        "token_f1": 0.3356,
+        "exact_match": 0.0714
+      }
+    }
+  },
+  "locomo": {
+    "benchmark": "LoCoMo",
+    "n_questions": 500,
+    "overall": {
+      "token_f1_mean": 0.1137,
+      "exact_match": 0.004,
+      "e2e_latency_p50_s": 4.13
+    },
+    "by_category": {
+      "multi-hop": {
+        "n": 91,
+        "token_f1": 0.0463,
+        "exact_match": 0.0
+      },
+      "temporal": {
+        "n": 22,
+        "token_f1": 0.0287,
+        "exact_match": 0.0
+      },
+      "single-hop": {
+        "n": 75,
+        "token_f1": 0.0989,
+        "exact_match": 0.0
+      },
+      "open-domain": {
+        "n": 200,
+        "token_f1": 0.2223,
+        "exact_match": 0.01
+      },
+      "adversarial": {
+        "n": 112,
+        "token_f1": 0.0009,
+        "exact_match": 0.0
+      }
+    }
+  }
+}

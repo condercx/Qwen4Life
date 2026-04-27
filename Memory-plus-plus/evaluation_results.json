@@ -1,0 +1,37 @@
+{
+  "memory_setup": {
+    "total_facts_stored": 7,
+    "batch_embed_latency_s": 1.154,
+    "total_setup_latency_s": 1.186,
+    "avg_fact_embed_latency_s": 0.165
+  },
+  "retrieval": {
+    "precision@5": 0.36,
+    "recall@5": 1.0,
+    "f1@5": 0.5238,
+    "batch_query_embed_latency_s": 0.295,
+    "search_latency_p50_s": 0.0006,
+    "search_latency_p95_s": 0.0024,
+    "search_latency_mean_s": 0.0011
+  },
+  "rag_chat": {
+    "keyword_hit_rate": 0.2,
+    "e2e_latency_p50_s": 999.0,
+    "e2e_latency_p95_s": 999.0,
+    "e2e_latency_mean_s": 799.572,
+    "token_usage_mean": 31.6,
+    "token_usage_p95": 126.4
+  },
+  "baseline_and_judge": {
+    "baseline_latency_p50_s": 999.0,
+    "baseline_latency_p95_s": 999.0,
+    "baseline_token_mean": 60.7,
+    "llm_judge_mean": 5.0,
+    "llm_judge_min": 5.0,
+    "llm_judge_max": 5.0
+  },
+  "efficiency": {
+    "token_reduction_pct": 47.9,
+    "latency_change_pct": -20.0
+  }
+}

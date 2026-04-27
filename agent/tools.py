@@ -31,11 +31,23 @@ class ToolRegistry:
     """管理 Agent 工具注册、描述和执行。"""
 
     adapter: EnvironmentAdapter = field(default_factory=_create_default_adapter)
+    memory: Any | None = None
     _tools: dict[str, Callable[..., str]] = field(default_factory=dict, init=False)
     _definitions: list[ToolDefinition] = field(default_factory=list, init=False)
+    _memory_tools_registered: bool = field(default=False, init=False)
 
     def __post_init__(self) -> None:
         self._register_builtin_tools()
+        if self.memory is not None:
+            self.set_memory(self.memory)
+
+    def set_memory(self, memory: Any | None) -> None:
+        """接入长期记忆，并按需注册记忆管理工具。"""
+
+        self.memory = memory
+        if self.memory is not None and not self._memory_tools_registered:
+            self._register_memory_tools()
+            self._memory_tools_registered = True
 
     def execute(self, session_id: str, tool_name: str, args: dict[str, Any]) -> str:
         """执行指定工具并返回可读文本。"""
@@ -85,6 +97,30 @@ class ToolRegistry:
                 "params": "命令参数字典，例如 {\"temperature\": 24}",
             },
             handler=self._tool_control_device,
+        )
+
+    def _register_memory_tools(self) -> None:
+        """注册长期记忆管理工具。"""
+
+        self._register(
+            name="list_memories",
+            description="列出当前用户已保存的长期记忆。只有用户明确要求查看记忆时调用。",
+            parameters={},
+            handler=self._tool_list_memories,
+        )
+        self._register(
+            name="delete_memory",
+            description="按 memory_id 删除当前用户的一条长期记忆。只有用户明确要求忘掉某条记忆时调用。",
+            parameters={
+                "memory_id": "要删除的长期记忆 ID，可先通过 list_memories 查询",
+            },
+            handler=self._tool_delete_memory,
+        )
+        self._register(
+            name="clear_user_memory",
+            description="清空当前用户的全部长期记忆。只有用户明确要求清空或删除全部记忆时调用。",
+            parameters={},
+            handler=self._tool_clear_user_memory,
         )
 
     def _register(
@@ -154,6 +190,27 @@ class ToolRegistry:
             f"错误码={error.get('code', 'unknown')}，"
             f"错误信息={error.get('message', '未知错误')}"
         )
+
+    def _tool_list_memories(self, session_id: str) -> str:
+        """列出当前会话用户的长期记忆。"""
+
+        if self.memory is None:
+            return "长期记忆未启用。"
+        return str(self.memory.list_memories(user_id=session_id))
+
+    def _tool_delete_memory(self, session_id: str, memory_id: str) -> str:
+        """删除当前会话用户的一条长期记忆。"""
+
+        if self.memory is None:
+            return "长期记忆未启用。"
+        return str(self.memory.delete_memory(user_id=session_id, memory_id=memory_id))
+
+    def _tool_clear_user_memory(self, session_id: str) -> str:
+        """清空当前会话用户的长期记忆。"""
+
+        if self.memory is None:
+            return "长期记忆未启用。"
+        return str(self.memory.clear_user_memory(user_id=session_id))
 
     @staticmethod
     def _infer_device_type(device_id: str) -> str:

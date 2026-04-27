@@ -23,6 +23,10 @@ htmlcov/
 .ipynb_checkpoints/
 *.log
 
+# Agent 长期记忆数据库
+.agent_memory/
+chroma_db/
+chroma_bench_kg/
 
 # 操作系统文件
 Thumbs.db

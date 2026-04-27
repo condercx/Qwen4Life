@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import unittest
 
+from agent.memory import AgentMemory
+from agent.memory_config import MemoryConfig
+from agent.memory_store import InMemoryMemoryStore
 from agent.tools import ToolRegistry
 from environment.actions import ERROR_DEVICE_OFFLINE
 from environment.adapter import InMemoryEnvironmentAdapter
@@ -29,6 +32,7 @@ class ToolRegistryTests(unittest.TestCase):
         self.assertIn("24.0", result)
         self.assertIn("35%", result)
         self.assertIn("26.0", result)
+        self.assertNotIn("list_memories", tools.get_tools_prompt())
 
     def test_control_device_updates_environment_state(self) -> None:
         adapter = InMemoryEnvironmentAdapter(env=SmartHomeEnv())
@@ -93,6 +97,45 @@ class ToolRegistryTests(unittest.TestCase):
         )
 
         self.assertIn(str(ERROR_DEVICE_OFFLINE), result)
+
+    def test_memory_tools_list_delete_and_clear_memories(self) -> None:
+        store = InMemoryMemoryStore()
+        memory = AgentMemory(store=store, config=MemoryConfig(top_k=5))
+        adapter = InMemoryEnvironmentAdapter(env=SmartHomeEnv())
+        tools = ToolRegistry(adapter=adapter, memory=memory)
+        adapter.create_session("memory-tool-session")
+
+        memory.save_memory(
+            user_id="memory-tool-session",
+            session_id="memory-tool-session",
+            memory_text="用户把客厅主灯叫做小太阳。",
+            memory_type="alias",
+        )
+        memory_id = store.get_all_memories("memory-tool-session")[0].memory_id
+
+        list_result = tools.execute("memory-tool-session", "list_memories", {})
+        delete_result = tools.execute(
+            "memory-tool-session",
+            "delete_memory",
+            {"memory_id": memory_id},
+        )
+
+        self.assertIn("list_memories", tools.get_tools_prompt())
+        self.assertIn(memory_id, list_result)
+        self.assertIn("设备别名", list_result)
+        self.assertIn("已删除", delete_result)
+        self.assertEqual(store.get_all_memories("memory-tool-session"), [])
+
+        memory.save_memory(
+            user_id="memory-tool-session",
+            session_id="memory-tool-session",
+            memory_text="用户喜欢空调默认 24 度。",
+            memory_type="preference",
+        )
+        clear_result = tools.execute("memory-tool-session", "clear_user_memory", {})
+
+        self.assertIn("已清空", clear_result)
+        self.assertEqual(store.get_all_memories("memory-tool-session"), [])
 
 
 if __name__ == "__main__":

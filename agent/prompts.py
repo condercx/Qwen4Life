@@ -3,8 +3,22 @@
 from __future__ import annotations
 
 
-def build_system_prompt(tools_prompt: str) -> str:
+def build_system_prompt(tools_prompt: str, memory_prompt: str = "") -> str:
     """构造系统提示词。"""
+
+    memory_section = ""
+    if memory_prompt.strip():
+        memory_section = f"""
+## 长期记忆
+
+{memory_prompt.strip()}
+
+长期记忆使用规则：
+- 长期记忆只作为用户偏好、习惯、设备别名和历史约定参考。
+- 当前设备状态和控制结果必须以工具 Observation 为准。
+- 当长期记忆和工具 Observation 冲突时，以工具 Observation 为准。
+- 不要在最终回答中暴露内部检索细节、记忆评分或存储信息。
+"""
 
     return f"""\
 你是一名智能家居助手，负责帮助用户查询和控制家庭设备。请始终使用自然、简洁、友好的中文回复。
@@ -33,6 +47,7 @@ Answer: 你的自然语言回复
 - 字典参数使用 JSON 格式，例如 params={{"temperature": 24}}。
 - 不要在最终回复里暴露内部工具细节。
 
+{memory_section}
 ## 可用工具
 
 {tools_prompt}
@@ -87,6 +102,7 @@ Answer: 你的自然语言回复
 - 用户要求控制设备时，调用 control_device()。
 - 用户表达“我冷了”“太暗了”等感受时，先判断是否需要查询状态，再做调整。
 - 如果一句话包含多个动作，按顺序逐个执行。
+- 只有用户明确要求查看、删除或清空长期记忆时，才调用 list_memories、delete_memory 或 clear_user_memory。
 - 回答要像真实助手，不要机械罗列。"""
 
 

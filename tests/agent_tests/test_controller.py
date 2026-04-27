@@ -3,13 +3,21 @@
 from __future__ import annotations
 
 from collections.abc import Iterator
+import os
 import unittest
 from typing import Any
+from unittest.mock import patch
 
 from agent.controller import FALLBACK_REPLY, SimpleSmartHomeAgent
 from agent.tools import ToolRegistry
 from environment.adapter import InMemoryEnvironmentAdapter
 from environment.smart_home_env import SmartHomeEnv
+
+SAVE_PREFERENCE_DECISION = (
+    '{"should_save": true, "memory_type": "preference", '
+    '"memory_text": "用户喜欢空调默认 24 度。"}'
+)
+NO_SAVE_DECISION = '{"should_save": false, "memory_type": "", "memory_text": ""}'
 
 
 class FakeLLMClient:
@@ -31,9 +39,23 @@ class FakeLLMClient:
 class FakeStreamingLLMClient:
     """按顺序返回预设流式片段的假模型客户端。"""
 
-    def __init__(self, responses: list[list[dict[str, str]]]) -> None:
+    def __init__(
+        self,
+        responses: list[list[dict[str, str]]],
+        completion_responses: list[str] | None = None,
+    ) -> None:
         self.responses = [list(response) for response in responses]
+        self.completion_responses = list(completion_responses or [])
         self.calls: list[list[dict[str, str]]] = []
+        self.completion_calls: list[list[dict[str, str]]] = []
+
+    def chat_completion(self, messages: list[dict[str, str]]) -> str:
+        """记录非流式请求，用于长期记忆保存决策。"""
+
+        self.completion_calls.append(list(messages))
+        if not self.completion_responses:
+            raise AssertionError("FakeStreamingLLMClient 缺少预设非流式响应。")
+        return self.completion_responses.pop(0)
 
     def chat_completion_stream(self, messages: list[dict[str, str]]) -> Iterator[dict[str, str]]:
         """记录请求消息，并逐片段返回下一组预设流式输出。"""
@@ -54,12 +76,48 @@ class FailingLLMClient:
         raise RuntimeError("模型服务不可用。")
 
 
-def build_agent(client: Any, env: SmartHomeEnv | None = None) -> SimpleSmartHomeAgent:
+class FakeAgentMemory:
+    """记录 controller 对长期记忆的检索和保存调用。"""
+
+    def __init__(
+        self,
+        context: str = "",
+        search_error: Exception | None = None,
+        save_error: Exception | None = None,
+    ) -> None:
+        self.context = context
+        self.search_error = search_error
+        self.save_error = save_error
+        self.search_calls: list[tuple[str, str, str]] = []
+        self.save_calls: list[tuple[str, str, str, str]] = []
+
+    def search_context(self, user_id: str, session_id: str, query: str) -> str:
+        """模拟长期记忆检索。"""
+
+        self.search_calls.append((user_id, session_id, query))
+        if self.search_error is not None:
+            raise self.search_error
+        return self.context
+
+    def save_memory(self, user_id: str, session_id: str, memory_text: str, memory_type: str) -> None:
+        """模拟长期记忆保存。"""
+
+        self.save_calls.append((user_id, session_id, memory_text, memory_type))
+        if self.save_error is not None:
+            raise self.save_error
+
+
+def build_agent(
+    client: Any,
+    env: SmartHomeEnv | None = None,
+    memory: Any | None = None,
+) -> SimpleSmartHomeAgent:
     """构造不依赖真实 HTTP 服务和模型服务的 Agent。"""
 
     adapter = InMemoryEnvironmentAdapter(env=env or SmartHomeEnv())
     tools = ToolRegistry(adapter=adapter)
-    return SimpleSmartHomeAgent(tools=tools, client=client)
+    with patch.dict(os.environ, {"AGENT_MEMORY_ENABLED": "false"}):
+        return SimpleSmartHomeAgent(tools=tools, client=client, memory=memory)
 
 
 class SimpleSmartHomeAgentTests(unittest.TestCase):
@@ -143,6 +201,98 @@ class SimpleSmartHomeAgentTests(unittest.TestCase):
         self.assertEqual(events[-1]["content"], "已把客厅灯调到 35。")
         self.assertEqual(state["devices"]["living_room_light_1"]["brightness"], 35)
         self.assertIn("Observation:", client.calls[1][-1]["content"])
+
+    def test_memory_disabled_keeps_prompt_without_memory_section(self) -> None:
+        client = FakeLLMClient(["Thought: direct\nAnswer: OK"])
+        agent = build_agent(client)
+
+        result = agent.handle_user_input("agent-session", "hello")
+
+        self.assertEqual(result.reply, "OK")
+        self.assertNotIn("## 长期记忆", client.calls[0][0]["content"])
+
+    def test_non_stream_injects_retrieved_memory_into_system_prompt(self) -> None:
+        memory = FakeAgentMemory(context="用户把客厅主灯叫做小太阳。")
+        client = FakeLLMClient(["Thought: use memory\nAnswer: 记住了", NO_SAVE_DECISION])
+        agent = build_agent(client, memory=memory)
+
+        result = agent.handle_user_input("agent-session", "打开小太阳")
+
+        system_prompt = client.calls[0][0]["content"]
+        self.assertEqual(result.reply, "记住了")
+        self.assertIn("## 长期记忆", system_prompt)
+        self.assertIn("用户把客厅主灯叫做小太阳。", system_prompt)
+        self.assertEqual(memory.search_calls, [("agent-session", "agent-session", "打开小太阳")])
+        self.assertEqual(memory.save_calls, [])
+
+    def test_non_stream_success_saves_one_memory_turn(self) -> None:
+        memory = FakeAgentMemory()
+        client = FakeLLMClient(["Thought: direct\nAnswer: 已完成", SAVE_PREFERENCE_DECISION])
+        agent = build_agent(client, memory=memory)
+
+        result = agent.handle_user_input("agent-session", "请记住我喜欢 24 度")
+
+        self.assertEqual(result.reply, "已完成")
+        self.assertEqual(
+            memory.save_calls,
+            [("agent-session", "agent-session", "用户喜欢空调默认 24 度。", "preference")],
+        )
+        self.assertIn("长期记忆筛选器", client.calls[1][0]["content"])
+        self.assertNotIn("Thought:", memory.save_calls[0][2])
+
+    def test_fallback_does_not_save_memory(self) -> None:
+        memory = FakeAgentMemory(context="历史偏好")
+        agent = build_agent(FailingLLMClient(), memory=memory)
+
+        result = agent.handle_user_input("agent-session", "打开灯")
+
+        self.assertEqual(result.reply, FALLBACK_REPLY)
+        self.assertEqual(memory.save_calls, [])
+
+    def test_stream_final_reply_saves_one_memory_turn(self) -> None:
+        memory = FakeAgentMemory()
+        client = FakeStreamingLLMClient(
+            [[{"type": "content", "content": "Thought: direct\nAnswer: 好的"}]],
+            completion_responses=[SAVE_PREFERENCE_DECISION],
+        )
+        agent = build_agent(client, memory=memory)
+
+        events = list(agent.handle_user_input_stream("agent-session", "你好"))
+
+        self.assertEqual(events[-1], {"type": "final_reply", "content": "好的"})
+        self.assertEqual(memory.save_calls, [("agent-session", "agent-session", "用户喜欢空调默认 24 度。", "preference")])
+        self.assertIn("长期记忆筛选器", client.completion_calls[0][0]["content"])
+
+    def test_empty_memory_context_does_not_render_memory_section(self) -> None:
+        memory = FakeAgentMemory(context="")
+        client = FakeLLMClient(["Thought: direct\nAnswer: OK", NO_SAVE_DECISION])
+        agent = build_agent(client, memory=memory)
+
+        agent.handle_user_input("agent-session", "hello")
+
+        self.assertEqual(memory.search_calls, [("agent-session", "agent-session", "hello")])
+        self.assertNotIn("## 长期记忆", client.calls[0][0]["content"])
+
+    def test_memory_search_error_does_not_break_main_flow(self) -> None:
+        memory = FakeAgentMemory(search_error=RuntimeError("search failed"))
+        client = FakeLLMClient(["Thought: direct\nAnswer: OK", SAVE_PREFERENCE_DECISION])
+        agent = build_agent(client, memory=memory)
+
+        result = agent.handle_user_input("agent-session", "hello")
+
+        self.assertEqual(result.reply, "OK")
+        self.assertNotIn("## 长期记忆", client.calls[0][0]["content"])
+        self.assertEqual(memory.save_calls, [("agent-session", "agent-session", "用户喜欢空调默认 24 度。", "preference")])
+
+    def test_memory_save_error_does_not_break_main_flow(self) -> None:
+        memory = FakeAgentMemory(save_error=RuntimeError("save failed"))
+        client = FakeLLMClient(["Thought: direct\nAnswer: OK", SAVE_PREFERENCE_DECISION])
+        agent = build_agent(client, memory=memory)
+
+        result = agent.handle_user_input("agent-session", "hello")
+
+        self.assertEqual(result.reply, "OK")
+        self.assertEqual(memory.save_calls, [("agent-session", "agent-session", "用户喜欢空调默认 24 度。", "preference")])
 
 
 if __name__ == "__main__":

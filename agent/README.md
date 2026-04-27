@@ -17,15 +17,19 @@
 - `parser.py`：解析模型输出中的 `Thought`、`Action`、`Answer`。
 - `tools.py`：注册并执行 Agent 工具。
 - `prompts.py`：系统提示词模板。
+- `memory_config.py` / `memory_client.py` / `memory_store.py` / `memory_decision.py` / `memory.py`：可选长期记忆配置、Ollama embedding、ChromaDB + BM25 + KG 检索、保存决策和 AgentMemory 门面。
 - `schema.py`：`ReactStep` 和 `AgentResult` 等内部结构。
 - `demo.py`：命令行入口。
 
 ## 当前工具
 
-目前注册了两个通用内置工具：
+默认注册两个通用设备工具；启用长期记忆后会额外注册三个记忆管理工具：
 
 - `query_all_devices()`：查询所有设备状态，包括灯光、空调、洗衣机、窗帘、传感器和智能插座。
 - `control_device(device_id, command, params)`：控制指定设备；传感器属于只读设备，只能查询状态。
+- `list_memories()`：列出当前用户的长期记忆和可删除 ID。
+- `delete_memory(memory_id)`：删除当前用户的一条长期记忆。
+- `clear_user_memory()`：清空当前用户的全部长期记忆。
 
 这两个工具都会通过 `environment.remote_adapter.RemoteEnvironmentAdapter` 调用环境服务。
 
@@ -119,3 +123,43 @@ ollama run qwen3.5:4b
 
 - 当前工具仍是查询和控制两个通用入口，尚未拆分成设备专用工具。
 - 仍依赖外部模型服务，仓库不包含模型本体。
+
+## 可选长期记忆
+
+`SimpleSmartHomeAgent` 可以接入长期记忆，但默认关闭。启用后，每轮用户输入会先检索相关历史记忆，并把检索结果注入 system prompt；ReAct 主循环仍照常调用 `query_all_devices` 和 `control_device`。最终成功回答后，Agent 会额外调用一次 LLM 判断本轮是否值得保存，并输出结构化 JSON。只有 Agent 判断本轮包含长期价值时才写入记忆，不会保存 `Thought`、`Action`、`Observation` 或 raw messages。fallback、异常和空回答不会写入长期记忆。
+
+长期记忆只用于用户偏好、习惯、设备别名和历史约定。实时设备状态、设备控制结果必须以工具返回的 `Observation` 为准；如果记忆与工具结果冲突，以工具结果为准。
+
+默认本地配置使用 Ollama embedding API 和 `bge-m3` 模型：
+
+```text
+AGENT_MEMORY_ENABLED=false
+AGENT_MEMORY_EMBED_BACKEND=ollama
+AGENT_MEMORY_OLLAMA_EMBED_URL=http://127.0.0.1:11434/api/embed
+AGENT_MEMORY_EMBED_MODEL=bge-m3
+AGENT_MEMORY_CHROMA_PATH=.agent_memory/chroma
+AGENT_MEMORY_COLLECTION=agent_memory
+AGENT_MEMORY_TOP_K=5
+AGENT_MEMORY_MIN_SCORE=0.0
+```
+
+启用示例：
+
+```powershell
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+ollama pull bge-m3
+$env:AGENT_MEMORY_ENABLED = "true"
+.\.venv\Scripts\python.exe agent/demo.py
+```
+
+记忆存储在相对路径 `.agent_memory/chroma`，这是本地 ChromaDB 数据目录，不是模型内部记忆。不同机器测试时可以删除该目录后重建，不应提交到 git。测试仍使用 fake/in-memory memory，不会调用 Ollama、Chroma 或联网。
+
+当前保存策略只写入 Agent 判断有长期价值的信息：用户偏好、设备别名、习惯、家庭规则和历史约定。普通寒暄、一次性设备操作、实时设备状态、fallback、异常和空回答不会写入长期记忆。
+
+检索侧会合并向量检索、BM25 关键词检索、轻量 KG 实体/关系匹配和 query expansion。query expansion 当前是本地轻量规则扩展，不额外调用 LLM。
+
+启用长期记忆后会额外注册 3 个工具：
+
+- `list_memories()`：列出当前用户的长期记忆和可删除 ID。
+- `delete_memory(memory_id)`：删除当前用户的一条长期记忆。
+- `clear_user_memory()`：清空当前用户的全部长期记忆。

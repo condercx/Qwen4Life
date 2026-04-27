@@ -1,0 +1,31 @@
+{
+  "longmemeval": {
+    "benchmark": "LongMemEval-S (Memory++)",
+    "n_questions": 100,
+    "question_types": [
+      "multi-session",
+      "single-session-user"
+    ],
+    "overall": {
+      "token_f1_mean": 0.6135,
+      "token_f1_p50": 1.0,
+      "exact_match": 0.53,
+      "retrieval_recall_mean": 0.9371,
+      "e2e_latency_p50_s": 43.21,
+      "e2e_latency_p95_s": 56.93,
+      "token_usage_mean": 6844.6
+    },
+    "by_type": {
+      "single-session-user": {
+        "n": 70,
+        "token_f1": 0.8396,
+        "exact_match": 0.7286
+      },
+      "multi-session": {
+        "n": 30,
+        "token_f1": 0.0857,
+        "exact_match": 0.0667
+      }
+    }
+  }
+}

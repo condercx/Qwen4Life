@@ -183,6 +183,7 @@ class OpenAICompatibleRemoteLLMClient(LLMClient):
             payload["response_format"] = {"type": "json_object"}
         if self.config.enable_thinking is not None:
             payload["enable_thinking"] = self.config.enable_thinking
+            payload["think"] = self.config.enable_thinking
         if self.config.thinking_budget is not None:
             payload["thinking_budget"] = self.config.thinking_budget
         return payload

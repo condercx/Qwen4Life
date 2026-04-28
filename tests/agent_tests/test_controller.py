@@ -13,12 +13,6 @@ from agent.tools import ToolRegistry
 from environment.adapter import InMemoryEnvironmentAdapter
 from environment.smart_home_env import SmartHomeEnv
 
-SAVE_PREFERENCE_DECISION = (
-    '{"should_save": true, "memory_type": "preference", '
-    '"memory_text": "用户喜欢空调默认 24 度。"}'
-)
-NO_SAVE_DECISION = '{"should_save": false, "memory_type": "", "memory_text": ""}'
-
 
 class FakeLLMClient:
     """按顺序返回预设内容的假模型客户端。"""
@@ -50,7 +44,7 @@ class FakeStreamingLLMClient:
         self.completion_calls: list[list[dict[str, str]]] = []
 
     def chat_completion(self, messages: list[dict[str, str]]) -> str:
-        """记录非流式请求，用于长期记忆保存决策。"""
+        """记录非流式请求。"""
 
         self.completion_calls.append(list(messages))
         if not self.completion_responses:
@@ -107,17 +101,35 @@ class FakeAgentMemory:
             raise self.save_error
 
 
+class FakeKnowledgeBase:
+    """记录 controller 对知识库工具的查询调用。"""
+
+    def __init__(self, result: str = "知识库检索结果：小红帽遇到了狼。") -> None:
+        self.result = result
+        self.search_calls: list[str] = []
+
+    def search(self, query: str) -> str:
+        self.search_calls.append(query)
+        return self.result
+
+
 def build_agent(
     client: Any,
     env: SmartHomeEnv | None = None,
     memory: Any | None = None,
+    knowledge_base: Any | None = None,
 ) -> SimpleSmartHomeAgent:
     """构造不依赖真实 HTTP 服务和模型服务的 Agent。"""
 
     adapter = InMemoryEnvironmentAdapter(env=env or SmartHomeEnv())
     tools = ToolRegistry(adapter=adapter)
-    with patch.dict(os.environ, {"AGENT_MEMORY_ENABLED": "false"}):
-        return SimpleSmartHomeAgent(tools=tools, client=client, memory=memory)
+    with patch.dict(os.environ, {"AGENT_MEMORY_ENABLED": "false", "AGENT_KB_ENABLED": "false"}):
+        return SimpleSmartHomeAgent(
+            tools=tools,
+            client=client,
+            memory=memory,
+            knowledge_base=knowledge_base,
+        )
 
 
 class SimpleSmartHomeAgentTests(unittest.TestCase):
@@ -154,6 +166,23 @@ class SimpleSmartHomeAgentTests(unittest.TestCase):
         self.assertEqual([step.type for step in result.steps], ["action", "observation", "answer"])
         self.assertEqual(state["devices"]["living_room_light_1"]["brightness"], 70)
         self.assertIn("Observation:", client.calls[1][-1]["content"])
+
+    def test_knowledge_base_action_then_answer_uses_tool_observation(self) -> None:
+        knowledge_base = FakeKnowledgeBase()
+        client = FakeLLMClient(
+            [
+                'Thought: 需要查知识库\nAction: search_knowledge_base(query="小红帽的寓意")',
+                "Thought: 已获得故事材料\nAnswer: 小红帽提醒我们不要轻信陌生人。",
+            ]
+        )
+        agent = build_agent(client, knowledge_base=knowledge_base)
+
+        result = agent.handle_user_input("agent-session", "给孩子讲小红帽的寓意")
+
+        self.assertEqual(result.reply, "小红帽提醒我们不要轻信陌生人。")
+        self.assertEqual(knowledge_base.search_calls, ["小红帽的寓意"])
+        self.assertIn("Observation:", client.calls[1][-1]["content"])
+        self.assertIn("search_knowledge_base", client.calls[0][0]["content"])
 
     def test_model_exception_returns_fallback_reply(self) -> None:
         agent = build_agent(FailingLLMClient())
@@ -213,7 +242,7 @@ class SimpleSmartHomeAgentTests(unittest.TestCase):
 
     def test_non_stream_injects_retrieved_memory_into_system_prompt(self) -> None:
         memory = FakeAgentMemory(context="用户把客厅主灯叫做小太阳。")
-        client = FakeLLMClient(["Thought: use memory\nAnswer: 记住了", NO_SAVE_DECISION])
+        client = FakeLLMClient(["Thought: use memory\nAnswer: 记住了"])
         agent = build_agent(client, memory=memory)
 
         result = agent.handle_user_input("agent-session", "打开小太阳")
@@ -225,19 +254,27 @@ class SimpleSmartHomeAgentTests(unittest.TestCase):
         self.assertEqual(memory.search_calls, [("agent-session", "agent-session", "打开小太阳")])
         self.assertEqual(memory.save_calls, [])
 
-    def test_non_stream_success_saves_one_memory_turn(self) -> None:
+    def test_non_stream_save_memory_tool_saves_one_memory(self) -> None:
         memory = FakeAgentMemory()
-        client = FakeLLMClient(["Thought: direct\nAnswer: 已完成", SAVE_PREFERENCE_DECISION])
+        client = FakeLLMClient(
+            [
+                (
+                    "Thought: 用户表达了长期偏好，需要保存\n"
+                    'Action: save_memory(memory_type="preference", memory_text="用户喜欢空调默认 24 度。")'
+                ),
+                "Thought: 记忆已经保存\nAnswer: 好的，我记住了。",
+            ]
+        )
         agent = build_agent(client, memory=memory)
 
         result = agent.handle_user_input("agent-session", "请记住我喜欢 24 度")
 
-        self.assertEqual(result.reply, "已完成")
+        self.assertEqual(result.reply, "好的，我记住了。")
+        self.assertEqual([step.type for step in result.steps], ["action", "observation", "answer"])
         self.assertEqual(
             memory.save_calls,
             [("agent-session", "agent-session", "用户喜欢空调默认 24 度。", "preference")],
         )
-        self.assertIn("长期记忆筛选器", client.calls[1][0]["content"])
         self.assertNotIn("Thought:", memory.save_calls[0][2])
 
     def test_fallback_does_not_save_memory(self) -> None:
@@ -252,20 +289,30 @@ class SimpleSmartHomeAgentTests(unittest.TestCase):
     def test_stream_final_reply_saves_one_memory_turn(self) -> None:
         memory = FakeAgentMemory()
         client = FakeStreamingLLMClient(
-            [[{"type": "content", "content": "Thought: direct\nAnswer: 好的"}]],
-            completion_responses=[SAVE_PREFERENCE_DECISION],
+            [
+                [
+                    {
+                        "type": "content",
+                        "content": (
+                            "Thought: 用户表达了长期偏好，需要保存\n"
+                            'Action: save_memory(memory_type="preference", memory_text="用户喜欢空调默认 24 度。")'
+                        ),
+                    }
+                ],
+                [{"type": "content", "content": "Thought: 记忆已经保存\nAnswer: 好的，我记住了。"}],
+            ],
         )
         agent = build_agent(client, memory=memory)
 
         events = list(agent.handle_user_input_stream("agent-session", "你好"))
 
-        self.assertEqual(events[-1], {"type": "final_reply", "content": "好的"})
+        self.assertEqual(events[-1], {"type": "final_reply", "content": "好的，我记住了。"})
         self.assertEqual(memory.save_calls, [("agent-session", "agent-session", "用户喜欢空调默认 24 度。", "preference")])
-        self.assertIn("长期记忆筛选器", client.completion_calls[0][0]["content"])
+        self.assertEqual(client.completion_calls, [])
 
     def test_empty_memory_context_does_not_render_memory_section(self) -> None:
         memory = FakeAgentMemory(context="")
-        client = FakeLLMClient(["Thought: direct\nAnswer: OK", NO_SAVE_DECISION])
+        client = FakeLLMClient(["Thought: direct\nAnswer: OK"])
         agent = build_agent(client, memory=memory)
 
         agent.handle_user_input("agent-session", "hello")
@@ -275,23 +322,31 @@ class SimpleSmartHomeAgentTests(unittest.TestCase):
 
     def test_memory_search_error_does_not_break_main_flow(self) -> None:
         memory = FakeAgentMemory(search_error=RuntimeError("search failed"))
-        client = FakeLLMClient(["Thought: direct\nAnswer: OK", SAVE_PREFERENCE_DECISION])
+        client = FakeLLMClient(["Thought: direct\nAnswer: OK"])
         agent = build_agent(client, memory=memory)
 
         result = agent.handle_user_input("agent-session", "hello")
 
         self.assertEqual(result.reply, "OK")
         self.assertNotIn("## 长期记忆", client.calls[0][0]["content"])
-        self.assertEqual(memory.save_calls, [("agent-session", "agent-session", "用户喜欢空调默认 24 度。", "preference")])
+        self.assertEqual(memory.save_calls, [])
 
     def test_memory_save_error_does_not_break_main_flow(self) -> None:
         memory = FakeAgentMemory(save_error=RuntimeError("save failed"))
-        client = FakeLLMClient(["Thought: direct\nAnswer: OK", SAVE_PREFERENCE_DECISION])
+        client = FakeLLMClient(
+            [
+                (
+                    "Thought: 用户表达了长期偏好，需要保存\n"
+                    'Action: save_memory(memory_type="preference", memory_text="用户喜欢空调默认 24 度。")'
+                ),
+                "Thought: 保存失败不影响回复\nAnswer: 好的。",
+            ]
+        )
         agent = build_agent(client, memory=memory)
 
         result = agent.handle_user_input("agent-session", "hello")
 
-        self.assertEqual(result.reply, "OK")
+        self.assertEqual(result.reply, "好的。")
         self.assertEqual(memory.save_calls, [("agent-session", "agent-session", "用户喜欢空调默认 24 度。", "preference")])
 
 

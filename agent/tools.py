@@ -32,14 +32,18 @@ class ToolRegistry:
 
     adapter: EnvironmentAdapter = field(default_factory=_create_default_adapter)
     memory: Any | None = None
+    knowledge_base: Any | None = None
     _tools: dict[str, Callable[..., str]] = field(default_factory=dict, init=False)
     _definitions: list[ToolDefinition] = field(default_factory=list, init=False)
     _memory_tools_registered: bool = field(default=False, init=False)
+    _knowledge_tools_registered: bool = field(default=False, init=False)
 
     def __post_init__(self) -> None:
         self._register_builtin_tools()
         if self.memory is not None:
             self.set_memory(self.memory)
+        if self.knowledge_base is not None:
+            self.set_knowledge_base(self.knowledge_base)
 
     def set_memory(self, memory: Any | None) -> None:
         """接入长期记忆，并按需注册记忆管理工具。"""
@@ -48,6 +52,14 @@ class ToolRegistry:
         if self.memory is not None and not self._memory_tools_registered:
             self._register_memory_tools()
             self._memory_tools_registered = True
+
+    def set_knowledge_base(self, knowledge_base: Any | None) -> None:
+        """接入儿童教育知识库，并按需注册查询工具。"""
+
+        self.knowledge_base = knowledge_base
+        if self.knowledge_base is not None and not self._knowledge_tools_registered:
+            self._register_knowledge_tools()
+            self._knowledge_tools_registered = True
 
     def execute(self, session_id: str, tool_name: str, args: dict[str, Any]) -> str:
         """执行指定工具并返回可读文本。"""
@@ -103,6 +115,18 @@ class ToolRegistry:
         """注册长期记忆管理工具。"""
 
         self._register(
+            name="save_memory",
+            description=(
+                "保存一条当前用户的长期记忆。仅当用户明确表达长期有价值的信息时调用，"
+                "例如用户偏好、设备别名、习惯、家庭规则、历史约定或儿童陪伴长期偏好。"
+            ),
+            parameters={
+                "memory_type": "记忆类型，只能是 preference、alias、habit、home_rule、agreement",
+                "memory_text": "简洁、可独立理解的中文记忆，不要包含 Thought、Action、Observation 或知识库故事正文",
+            },
+            handler=self._tool_save_memory,
+        )
+        self._register(
             name="list_memories",
             description="列出当前用户已保存的长期记忆。只有用户明确要求查看记忆时调用。",
             parameters={},
@@ -121,6 +145,21 @@ class ToolRegistry:
             description="清空当前用户的全部长期记忆。只有用户明确要求清空或删除全部记忆时调用。",
             parameters={},
             handler=self._tool_clear_user_memory,
+        )
+
+    def _register_knowledge_tools(self) -> None:
+        """注册儿童教育知识库查询工具。"""
+
+        self._register(
+            name="search_knowledge_base",
+            description=(
+                "查询本地儿童教育知识库。凡是格林童话、睡前故事、故事寓意、"
+                "儿童陪伴讲解等问题都必须先调用本工具。知识库只提供参考材料，最终回答仍由 Agent 生成。"
+            ),
+            parameters={
+                "query": "自然语言查询，例如 小红帽的故事和寓意",
+            },
+            handler=self._tool_search_knowledge_base,
         )
 
     def _register(
@@ -198,6 +237,21 @@ class ToolRegistry:
             return "长期记忆未启用。"
         return str(self.memory.list_memories(user_id=session_id))
 
+    def _tool_save_memory(self, session_id: str, memory_type: str, memory_text: str) -> str:
+        """保存当前会话用户的一条长期记忆。"""
+
+        if self.memory is None:
+            return "长期记忆未启用。"
+        saved = self.memory.save_memory(
+            user_id=session_id,
+            session_id=session_id,
+            memory_text=memory_text,
+            memory_type=memory_type,
+        )
+        if saved:
+            return "已保存长期记忆。"
+        return "未保存长期记忆：内容为空、类型不合法或已存在。"
+
     def _tool_delete_memory(self, session_id: str, memory_id: str) -> str:
         """删除当前会话用户的一条长期记忆。"""
 
@@ -211,6 +265,14 @@ class ToolRegistry:
         if self.memory is None:
             return "长期记忆未启用。"
         return str(self.memory.clear_user_memory(user_id=session_id))
+
+    def _tool_search_knowledge_base(self, session_id: str, query: str) -> str:
+        """查询儿童教育知识库。"""
+
+        del session_id
+        if self.knowledge_base is None:
+            return "知识库未启用。"
+        return str(self.knowledge_base.search(query=query))
 
     @staticmethod
     def _infer_device_type(device_id: str) -> str:

@@ -7,11 +7,12 @@ from collections.abc import Iterator
 from dataclasses import dataclass, field
 from typing import TypeAlias
 
+from agent.knowledge_base import AgentKnowledgeBase, create_default_knowledge_base
+from agent.knowledge_config import KnowledgeConfig
 from agent.llm_client import LLMClient, create_default_llm_client
 from agent.llm_config import LLMConfig
 from agent.memory import AgentMemory, create_default_agent_memory
 from agent.memory_config import MemoryConfig
-from agent.memory_decision import request_memory_decision
 from agent.parser import parse_react_output
 from agent.prompts import build_system_prompt, build_user_prompt
 from agent.schema import AgentResult, ReactStep
@@ -35,6 +36,7 @@ class SimpleSmartHomeAgent:
     client: LLMClient | None = None
     config: LLMConfig | None = None
     memory: AgentMemory | None = None
+    knowledge_base: AgentKnowledgeBase | None = None
     _session_histories: dict[str, list[Message]] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
@@ -51,6 +53,15 @@ class SimpleSmartHomeAgent:
                     logger.warning("长期记忆初始化失败，本轮运行将不启用 memory：%s", exc)
         if self.memory is not None:
             self.tools.set_memory(self.memory)
+        if self.knowledge_base is None:
+            knowledge_config = KnowledgeConfig.from_env()
+            if knowledge_config.enabled:
+                try:
+                    self.knowledge_base = create_default_knowledge_base(knowledge_config)
+                except Exception as exc:
+                    logger.warning("知识库初始化失败，本轮运行将不启用 knowledge base：%s", exc)
+        if self.knowledge_base is not None:
+            self.tools.set_knowledge_base(self.knowledge_base)
 
     def create_session(self, session_id: str) -> None:
         """创建或重置会话。"""
@@ -88,11 +99,6 @@ class SimpleSmartHomeAgent:
             if parsed_step.type == "answer":
                 self._store_assistant_message(history, raw_output)
                 self._trim_history(normalized_session_id)
-                self._save_memory_turn(
-                    session_id=normalized_session_id,
-                    user_input=normalized_user_input,
-                    assistant_reply=parsed_step.content,
-                )
                 return AgentResult(
                     session_id=normalized_session_id,
                     user_input=normalized_user_input,
@@ -153,11 +159,6 @@ class SimpleSmartHomeAgent:
             if parsed_step.type == "answer":
                 self._store_assistant_message(history, raw_output)
                 self._trim_history(normalized_session_id)
-                self._save_memory_turn(
-                    session_id=normalized_session_id,
-                    user_input=normalized_user_input,
-                    assistant_reply=parsed_step.content,
-                )
                 yield {"type": "final_reply", "content": parsed_step.content}
                 return
 
@@ -212,24 +213,6 @@ class SimpleSmartHomeAgent:
         except Exception as exc:
             logger.debug("长期记忆检索失败，已忽略：%s", exc)
             return ""
-
-    def _save_memory_turn(self, session_id: str, user_input: str, assistant_reply: str) -> None:
-        """由 agent 判断并保存成功轮次的长期记忆，失败时不影响主流程。"""
-
-        if self.memory is None or not assistant_reply.strip():
-            return
-        try:
-            decision = request_memory_decision(self.client, user_input, assistant_reply)
-            if not decision.should_save:
-                return
-            self.memory.save_memory(
-                user_id=session_id,
-                session_id=session_id,
-                memory_text=decision.memory_text,
-                memory_type=decision.memory_type,
-            )
-        except Exception as exc:
-            logger.debug("长期记忆保存失败，已忽略：%s", exc)
 
     def _execute_action_step(
         self,

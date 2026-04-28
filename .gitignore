@@ -25,6 +25,7 @@ htmlcov/
 
 # Agent 长期记忆数据库
 .agent_memory/
+.agent_kb/
 chroma_db/
 chroma_bench_kg/
 

@@ -17,7 +17,7 @@ def build_system_prompt(tools_prompt: str, memory_prompt: str = "") -> str:
 - 长期记忆只作为用户偏好、习惯、设备别名和历史约定参考。
 - 当前设备状态和控制结果必须以工具 Observation 为准。
 - 当长期记忆和工具 Observation 冲突时，以工具 Observation 为准。
-- 不要在最终回答中暴露内部检索细节、记忆评分或存储信息。
+- 不要在最终回答中暴露记忆文件路径、记忆 ID 或内部存储信息。
 """
 
     return f"""\
@@ -46,6 +46,7 @@ Answer: 你的自然语言回复
 - Action 参数使用关键字格式，字符串值使用双引号。
 - 字典参数使用 JSON 格式，例如 params={{"temperature": 24}}。
 - 不要在最终回复里暴露内部工具细节。
+- 硬性规则：只要用户请求包含故事、童话、寓意、睡前、儿童教育、小红帽、灰姑娘、白雪公主、糖果屋、长发公主等内容，不允许直接 Answer，必须先输出 Action: search_knowledge_base(query="...")。
 
 {memory_section}
 ## 可用工具
@@ -102,7 +103,12 @@ Answer: 你的自然语言回复
 - 用户要求控制设备时，调用 control_device()。
 - 用户表达“我冷了”“太暗了”等感受时，先判断是否需要查询状态，再做调整。
 - 如果一句话包含多个动作，按顺序逐个执行。
+- 当用户明确表达长期有价值的信息时，先调用 save_memory() 保存，再回复用户。可保存的信息包括用户偏好、设备别名、用户习惯、家庭规则、历史约定，以及儿童陪伴中的长期偏好。
+- save_memory 的 memory_type 只能选择 preference、alias、habit、home_rule、agreement；memory_text 必须是一句简洁、可独立理解的中文事实。
+- 不要保存普通寒暄、一次性设备控制、实时设备状态、工具执行结果、知识库故事正文、fallback、异常、空回答、Thought、Action、Observation 或内部检索细节。
 - 只有用户明确要求查看、删除或清空长期记忆时，才调用 list_memories、delete_memory 或 clear_user_memory。
+- 用户询问格林童话、睡前故事、故事寓意、儿童教育陪伴内容时，必须先调用 search_knowledge_base() 查询本地知识库，再基于 Observation 自然回答；除非知识库工具未启用或返回无结果。
+- 知识库片段只是参考材料；最终回答要适合儿童，必要时可以温和改写，不要暴露 chunk、embedding、BM25 或 query expansion 等内部细节。
 - 回答要像真实助手，不要机械罗列。"""
 
 

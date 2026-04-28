@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import unittest
 
+from agent.knowledge_base import AgentKnowledgeBase
+from agent.knowledge_config import KnowledgeConfig
+from agent.knowledge_store import InMemoryKnowledgeStore, KnowledgeChunk
 from agent.memory import AgentMemory
 from agent.memory_config import MemoryConfig
-from agent.memory_store import InMemoryMemoryStore
 from agent.tools import ToolRegistry
 from environment.actions import ERROR_DEVICE_OFFLINE
 from environment.adapter import InMemoryEnvironmentAdapter
@@ -16,6 +18,11 @@ from environment.smart_home_env import SmartHomeEnv
 
 class ToolRegistryTests(unittest.TestCase):
     """验证不依赖 HTTP 服务和模型服务的工具行为。"""
+
+    def tearDown(self) -> None:
+        import shutil
+
+        shutil.rmtree(".tmp_tool_memory", ignore_errors=True)
 
     def test_query_all_devices_uses_in_memory_environment(self) -> None:
         tools = ToolRegistry(
@@ -99,8 +106,7 @@ class ToolRegistryTests(unittest.TestCase):
         self.assertIn(str(ERROR_DEVICE_OFFLINE), result)
 
     def test_memory_tools_list_delete_and_clear_memories(self) -> None:
-        store = InMemoryMemoryStore()
-        memory = AgentMemory(store=store, config=MemoryConfig(top_k=5))
+        memory = AgentMemory(config=MemoryConfig(memory_dir=".tmp_tool_memory"))
         adapter = InMemoryEnvironmentAdapter(env=SmartHomeEnv())
         tools = ToolRegistry(adapter=adapter, memory=memory)
         adapter.create_session("memory-tool-session")
@@ -111,20 +117,20 @@ class ToolRegistryTests(unittest.TestCase):
             memory_text="用户把客厅主灯叫做小太阳。",
             memory_type="alias",
         )
-        memory_id = store.get_all_memories("memory-tool-session")[0].memory_id
-
         list_result = tools.execute("memory-tool-session", "list_memories", {})
+        memory_id = list_result.split("id=", 1)[1].split("，", 1)[0]
         delete_result = tools.execute(
             "memory-tool-session",
             "delete_memory",
             {"memory_id": memory_id},
         )
 
+        self.assertIn("save_memory", tools.get_tools_prompt())
         self.assertIn("list_memories", tools.get_tools_prompt())
         self.assertIn(memory_id, list_result)
         self.assertIn("设备别名", list_result)
         self.assertIn("已删除", delete_result)
-        self.assertEqual(store.get_all_memories("memory-tool-session"), [])
+        self.assertEqual(tools.execute("memory-tool-session", "list_memories", {}), "当前没有长期记忆。")
 
         memory.save_memory(
             user_id="memory-tool-session",
@@ -135,7 +141,49 @@ class ToolRegistryTests(unittest.TestCase):
         clear_result = tools.execute("memory-tool-session", "clear_user_memory", {})
 
         self.assertIn("已清空", clear_result)
-        self.assertEqual(store.get_all_memories("memory-tool-session"), [])
+        self.assertEqual(tools.execute("memory-tool-session", "list_memories", {}), "当前没有长期记忆。")
+
+    def test_save_memory_tool_writes_markdown_memory(self) -> None:
+        memory = AgentMemory(config=MemoryConfig(memory_dir=".tmp_tool_memory"))
+        adapter = InMemoryEnvironmentAdapter(env=SmartHomeEnv())
+        tools = ToolRegistry(adapter=adapter, memory=memory)
+
+        save_result = tools.execute(
+            "memory-tool-session",
+            "save_memory",
+            {
+                "memory_type": "preference",
+                "memory_text": "用户喜欢睡前故事温柔一点。",
+            },
+        )
+        list_result = tools.execute("memory-tool-session", "list_memories", {})
+
+        self.assertEqual(save_result, "已保存长期记忆。")
+        self.assertIn("用户喜欢睡前故事温柔一点。", list_result)
+
+    def test_knowledge_base_tool_searches_children_education_corpus(self) -> None:
+        knowledge_base = AgentKnowledgeBase(
+            store=InMemoryKnowledgeStore(
+                [
+                    KnowledgeChunk(
+                        chunk_id="red",
+                        title="LITTLE RED-CAP [LITTLE RED RIDING HOOD]",
+                        text="A little girl meets a wolf on the way to her grandmother.",
+                        source="Project Gutenberg",
+                    )
+                ]
+            ),
+            config=KnowledgeConfig(top_k=1),
+        )
+        tools = ToolRegistry(
+            adapter=InMemoryEnvironmentAdapter(env=SmartHomeEnv()),
+            knowledge_base=knowledge_base,
+        )
+
+        result = tools.execute("kb-tool-session", "search_knowledge_base", {"query": "小红帽的故事"})
+
+        self.assertIn("search_knowledge_base", tools.get_tools_prompt())
+        self.assertIn("LITTLE RED-CAP", result)
 
 
 if __name__ == "__main__":

@@ -1,4 +1,4 @@
-"""长期记忆 embedding 客户端。"""
+"""Embedding 客户端。"""
 
 from __future__ import annotations
 
@@ -6,7 +6,13 @@ from typing import Any, Protocol
 
 import httpx
 
-from agent.memory_config import MemoryConfig
+
+class EmbeddingConfig(Protocol):
+    """Ollama embedding 客户端需要的最小配置。"""
+
+    ollama_embed_url: str
+    embed_model: str
+    timeout_seconds: float
 
 
 class EmbeddingClient(Protocol):
@@ -19,8 +25,8 @@ class EmbeddingClient(Protocol):
 class OllamaEmbeddingClient:
     """通过 Ollama `/api/embed` 调用本地 bge-m3 embedding 模型。"""
 
-    def __init__(self, config: MemoryConfig | None = None, transport: httpx.BaseTransport | None = None) -> None:
-        self.config = config or MemoryConfig.from_env()
+    def __init__(self, config: EmbeddingConfig, transport: httpx.BaseTransport | None = None) -> None:
+        self.config = config
         self.transport = transport
 
     def embed(self, texts: list[str]) -> list[list[float]]:

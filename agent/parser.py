@@ -21,7 +21,7 @@ def parse_react_output(raw_text: str) -> ReactStep:
 
     text = raw_text.strip()
     if not text:
-        return ReactStep(type="answer", content="")
+        return ReactStep(type="empty", content="")
 
     action_match = ACTION_PATTERN.search(text)
     if action_match:
@@ -38,6 +38,8 @@ def parse_react_output(raw_text: str) -> ReactStep:
     answer_match = ANSWER_PATTERN.search(text)
     if answer_match:
         answer_text = _strip_wrapping_quotes(answer_match.group(1).strip())
+        if not answer_text:
+            return ReactStep(type="empty", content="")
         return ReactStep(type="answer", content=answer_text)
 
     thought_match = THOUGHT_PATTERN.match(text)

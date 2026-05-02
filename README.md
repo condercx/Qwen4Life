@@ -15,7 +15,7 @@ Qwen4Life 是一个面向智能家居场景的最小可运行 Agent + Environmen
 - 支持设备控制、状态查询和事件读取。
 - 支持洗衣机这类带时间推进的设备任务。
 - 提供独立的 FastAPI 环境服务，Agent 通过 HTTP 调用环境。
-- 提供命令行 Agent demo，支持单轮模式和交互模式。
+- 提供命令行 Agent demo，单轮和交互模式都使用流式输出。
 - 环境核心支持内存适配器和可控时间，便于编写不依赖服务进程的单元测试。
 - 支持可选儿童教育 RAG 知识库，当前示例语料为 Project Gutenberg 的《格林童话》。
 - 支持可选 markdown 长期记忆，由 Agent 自己判断是否记录用户偏好、别名、习惯、家庭规则和历史约定。
@@ -77,7 +77,7 @@ Qwen4Life
 ### `agent/`
 
 - `controller.py`：ReAct 主循环，负责会话上下文、模型调用、工具执行和 fallback 处理。
-- `llm_client.py`：OpenAI 兼容接口客户端，支持非流式和流式输出。
+- `llm_client.py`：OpenAI 兼容接口客户端，只使用流式输出，兼容 `<think>` 标签和 reasoning 字段。
 - `llm_config.py`：从环境变量或 `.env` 读取模型配置。
 - `parser.py`：解析模型输出中的 `Thought / Action / Answer`。
 - `tools.py`：注册并执行 Agent 工具，当前包含设备查询和设备控制。
@@ -150,6 +150,8 @@ ollama run qwen3.5:4b
 - `AGENT_MODEL_ENABLE_THINKING`
 - `AGENT_MODEL_THINKING_BUDGET`
 
+当 `AGENT_MODEL_ENABLE_THINKING=false` 时，客户端会同时发送 Ollama/OpenAI 兼容的 `think=false`、`enable_thinking=false`、`reasoning_effort=none` 和 `reasoning.effort=none`，尽量避免模型输出大段 reasoning。
+
 ### 3. 启动 Agent demo
 
 交互模式：
@@ -158,11 +160,27 @@ ollama run qwen3.5:4b
 python agent/demo.py
 ```
 
-显示更完整的推理过程：
+显示完整流式调试事件和模型原始片段：
 
 ```bash
 python agent/demo.py -v
 ```
+
+普通模式不会展示 `Thought`、`Action`、工具返回和模型调试片段，只流式输出最终 `Answer`。`-v/--verbose` 模式会完整展示模型返回的 `content` / `reasoning` 和 `action_start`、`observation`、`final_reply` 等 Agent 事件；连续模型片段会聚合在同一个区块内，避免每个 token 都换行。
+
+### 4. 上下文管理
+
+Agent 只把最终用户可见的 `Answer` 写入会话历史，不会把 `Thought`、`Action` 或 `Observation` 存入下一轮上下文。这样复杂问题之后继续追问时，不会反复携带大段内部推理。
+
+可通过环境变量控制会话历史预算：
+
+```text
+AGENT_MAX_HISTORY_MESSAGES=8
+AGENT_MAX_HISTORY_CHARS=6000
+AGENT_MAX_HISTORY_MESSAGE_CHARS=1200
+```
+
+`AGENT_MAX_HISTORY_MESSAGES` 控制最多保留多少条历史消息；`AGENT_MAX_HISTORY_CHARS` 控制历史消息的粗略字符预算；`AGENT_MAX_HISTORY_MESSAGE_CHARS` 控制单条历史消息最大长度。预算越小，后续响应通常越快，但跨轮上下文也会更少。默认模型输出上限 `AGENT_MODEL_MAX_TOKENS` 为 1024，避免单轮生成过长导致后续等待时间过久。
 
 单轮模式：
 
@@ -260,7 +278,7 @@ clock.advance(10)
 python -m unittest discover -s tests
 ```
 
-这些测试不会启动 uvicorn 进程，也不会连接模型服务；HTTP 服务边界通过 FastAPI `TestClient` 在进程内验证，Agent 控制器测试使用假模型客户端驱动非流式和流式 ReAct 输出。
+这些测试不会启动 uvicorn 进程，也不会连接模型服务；HTTP 服务边界通过 FastAPI `TestClient` 在进程内验证，Agent 控制器测试使用假流式模型客户端驱动 ReAct 输出。
 
 ## 本地验证
 
@@ -270,7 +288,7 @@ python -m unittest discover -s tests
 - `python -m unittest discover -s tests`
 - `python agent/demo.py --help`
 
-当前测试覆盖环境层 `reset -> step -> state`、新增设备模型、FastAPI 服务边界、`InMemoryEnvironmentAdapter` 工具调用，以及 `SimpleSmartHomeAgent` 的 fake LLM 非流式和流式控制器路径。
+当前测试覆盖环境层 `reset -> step -> state`、新增设备模型、FastAPI 服务边界、`InMemoryEnvironmentAdapter` 工具调用，以及 `SimpleSmartHomeAgent` 的 fake LLM 流式控制器路径。
 
 ## 当前限制
 

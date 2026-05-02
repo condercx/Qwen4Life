@@ -12,10 +12,6 @@ if str(WORKSPACE_ROOT) not in sys.path:
 
 from agent import SimpleSmartHomeAgent
 
-THOUGHT_PREFIX = "\n[思考中] "
-ACTION_PREFIX = "[执行动作]"
-OBSERVATION_PREFIX = "观察结果"
-
 
 def main() -> None:
     """运行单轮或交互式 Agent 演示。"""
@@ -44,120 +40,6 @@ def main() -> None:
         _process_stream(agent, session_id, user_input, args.verbose)
 
 
-class _VerboseRenderer:
-    """在 verbose 模式下按关键字切分流式输出。"""
-
-    keywords: dict[str, tuple[str, str]] = {
-        "Thought:": (THOUGHT_PREFIX, "thought"),
-        "Answer:": ("", "answer"),
-        "Action:": ("", "action"),
-    }
-
-    def __init__(self, showed_reasoning: bool = False) -> None:
-        self.state = "detect"
-        self.buffer = ""
-        self.showed_reasoning = showed_reasoning
-
-    def feed(self, text: str) -> None:
-        """接收一个增量文本块。"""
-
-        self.buffer += text
-        self._drain()
-
-    def flush(self) -> None:
-        """在轮次结束时清空缓冲区。"""
-
-        if not self.buffer:
-            self.state = "detect"
-            return
-
-        if self.state != "action":
-            print(self.buffer, end="", flush=True)
-        self.buffer = ""
-        self.state = "detect"
-
-    def _drain(self) -> None:
-        """持续消费缓冲区中的内容。"""
-
-        while self.buffer:
-            previous_length = len(self.buffer)
-            if self.state == "detect":
-                self._handle_detect()
-            elif self.state in {"thought", "passthrough"}:
-                self._handle_streaming()
-            elif self.state == "answer":
-                print(self.buffer, end="", flush=True)
-                self.buffer = ""
-            elif self.state == "action":
-                self.buffer = ""
-
-            if len(self.buffer) == previous_length:
-                break
-
-    def _handle_detect(self) -> None:
-        """识别当前缓冲区是否以关键字开头。"""
-
-        stripped_text = self.buffer.lstrip("\n\r\t ")
-        if not stripped_text:
-            return
-
-        for keyword, (prefix, next_state) in self.keywords.items():
-            if stripped_text.startswith(keyword):
-                if next_state == "thought" and not self.showed_reasoning:
-                    print(prefix, end="", flush=True)
-                elif next_state == "thought" and self.showed_reasoning:
-                    print(flush=True)
-                elif next_state == "answer":
-                    print("\n", end="", flush=True)
-
-                keyword_index = self.buffer.find(keyword) + len(keyword)
-                self.buffer = self.buffer[keyword_index:].lstrip(" ")
-                self.state = next_state
-                return
-
-        if any(keyword.startswith(stripped_text) for keyword in self.keywords):
-            return
-        self.state = "passthrough"
-
-    def _handle_streaming(self) -> None:
-        """在流式输出中查找下一段关键字边界。"""
-
-        position = 0
-        while position < len(self.buffer):
-            if self.buffer[position] != "\n":
-                position += 1
-                continue
-
-            next_start = position + 1
-            while next_start < len(self.buffer) and self.buffer[next_start] in "\n\r\t ":
-                next_start += 1
-
-            trailing_text = self.buffer[next_start:]
-            if not trailing_text:
-                if position > 0:
-                    print(self.buffer[:position], end="", flush=True)
-                    self.buffer = self.buffer[position:]
-                return
-
-            for keyword in self.keywords:
-                if keyword == "Thought:":
-                    continue
-                if trailing_text.startswith(keyword):
-                    print(self.buffer[:position], end="", flush=True)
-                    self.buffer = self.buffer[next_start:]
-                    self.state = "detect"
-                    return
-                if keyword.startswith(trailing_text):
-                    print(self.buffer[:position], end="", flush=True)
-                    self.buffer = self.buffer[position:]
-                    return
-
-            position = next_start
-
-        print(self.buffer, end="", flush=True)
-        self.buffer = ""
-
-
 def _process_stream(
     agent: SimpleSmartHomeAgent,
     session_id: str,
@@ -167,74 +49,102 @@ def _process_stream(
     """消费 Agent 流式输出并渲染到终端。"""
 
     print("\n助手> ", end="", flush=True)
-    content_buffer = ""
-    printing_answer = False
-    showed_reasoning = False
-    renderer = _VerboseRenderer(showed_reasoning=False) if verbose else None
+    renderer = _NormalAnswerRenderer()
+    verbose_renderer = _VerboseLogRenderer() if verbose else None
 
     for chunk in agent.handle_user_input_stream(session_id, user_input):
         chunk_type = chunk["type"]
         text = chunk["content"]
 
-        if chunk_type == "reasoning":
-            if verbose:
-                if not showed_reasoning:
-                    print(THOUGHT_PREFIX, end="", flush=True)
-                    showed_reasoning = True
-                    assert renderer is not None
-                    renderer.showed_reasoning = True
-                print(text, end="", flush=True)
+        if verbose:
+            assert verbose_renderer is not None
+            verbose_renderer.render(chunk_type, text)
             continue
 
-        if chunk_type == "content":
-            if verbose:
-                assert renderer is not None
-                renderer.feed(text)
-                continue
-
-            content_buffer += text
-            if not printing_answer:
-                answer_index = content_buffer.find("Answer:")
-                if answer_index != -1:
-                    printing_answer = True
-                    answer_text = content_buffer[answer_index + len("Answer:") :].lstrip()
-                    if answer_text:
-                        print(answer_text, end="", flush=True)
-            else:
-                print(text, end="", flush=True)
+        if chunk_type in {"reasoning", "content"}:
+            renderer.feed(chunk_type, text)
             continue
 
         if chunk_type == "action_start":
-            if verbose:
-                assert renderer is not None
-                renderer.flush()
-                print(ACTION_PREFIX)
-                print(text.strip())
-                showed_reasoning = False
-                renderer = _VerboseRenderer(showed_reasoning=False)
-            content_buffer = ""
+            renderer.reset()
             continue
 
         if chunk_type == "observation":
-            if verbose:
-                print(f"{OBSERVATION_PREFIX}: {text.strip()}\n\n助手> ", end="", flush=True)
             continue
 
         if chunk_type == "final_reply":
-            if verbose and renderer is not None:
-                renderer.flush()
-            elif not printing_answer and text.strip():
+            if not renderer.has_printed_answer and text.strip():
                 print(text.strip(), end="", flush=True)
             print("\n")
-            content_buffer = ""
-            printing_answer = False
-            showed_reasoning = False
-            if verbose:
-                renderer = _VerboseRenderer(showed_reasoning=False)
+            renderer.reset()
             continue
 
         if chunk_type == "error":
             print(f"{text}\n")
+
+
+class _NormalAnswerRenderer:
+    """普通模式只展示最终 Answer 文本。"""
+
+    def __init__(self) -> None:
+        self.buffer = ""
+        self.has_printed_answer = False
+
+    def feed(self, chunk_type: str, text: str) -> None:
+        """消费模型流式片段，隐藏 Thought/Action，只输出 Answer 后的内容。"""
+
+        if chunk_type != "content":
+            return
+
+        if self.has_printed_answer:
+            print(text, end="", flush=True)
+            return
+
+        self.buffer += text
+        answer_index = self.buffer.find("Answer:")
+        if answer_index == -1:
+            return
+
+        self.has_printed_answer = True
+        answer_text = self.buffer[answer_index + len("Answer:") :].lstrip()
+        if answer_text:
+            print(answer_text, end="", flush=True)
+        self.buffer = ""
+
+    def reset(self) -> None:
+        """开始下一次模型调用时重置普通输出状态。"""
+
+        self.buffer = ""
+        self.has_printed_answer = False
+
+
+class _VerboseLogRenderer:
+    """详细模式按事件类型聚合输出，避免每个 token 都换行。"""
+
+    def __init__(self) -> None:
+        self.current_stream_type = ""
+
+    def render(self, chunk_type: str, text: str) -> None:
+        """渲染一个流式事件，模型连续片段会合并到同一段。"""
+
+        if chunk_type in {"reasoning", "content"}:
+            self._render_model_chunk(chunk_type, text)
+            return
+
+        self.current_stream_type = ""
+        if chunk_type == "final_reply":
+            print(f"\n[Agent事件/final_reply]\n{text}\n", flush=True)
+            return
+        if chunk_type == "error":
+            print(f"\n[Agent事件/error]\n{text}", flush=True)
+            return
+        print(f"\n[Agent事件/{chunk_type}]\n{text.strip()}", flush=True)
+
+    def _render_model_chunk(self, chunk_type: str, text: str) -> None:
+        if self.current_stream_type != chunk_type:
+            self.current_stream_type = chunk_type
+            print(f"\n[模型返回/{chunk_type}]\n", end="", flush=True)
+        print(text, end="", flush=True)
 
 
 def _parse_args() -> argparse.Namespace:
@@ -243,7 +153,7 @@ def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="智能家居 ReAct Agent demo")
     parser.add_argument("user_input", nargs="?", help="单轮用户输入")
     parser.add_argument("--session-id", default="agent-demo-session", help="会话 ID")
-    parser.add_argument("--verbose", "-v", action="store_true", help="显示完整推理过程")
+    parser.add_argument("--verbose", "-v", action="store_true", help="显示完整流式调试事件和模型原始片段")
     return parser.parse_args()
 
 

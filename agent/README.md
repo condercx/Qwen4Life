@@ -12,14 +12,14 @@
 ## 当前模块
 
 - `controller.py`：ReAct 主循环，会话管理、上下文拼接、工具执行和兜底处理都在这里。
-- `llm_client.py`：OpenAI 兼容接口客户端，支持非流式和流式返回，也兼容 `<think>` 标签和 `reasoning_content`。
+- `llm_client.py`：OpenAI 兼容接口客户端，只使用流式返回，也兼容 `<think>` 标签、`reasoning_content` 和 `reasoning`。
 - `llm_config.py`：读取模型相关环境变量。
 - `parser.py`：解析模型输出中的 `Thought`、`Action`、`Answer`。
 - `tools.py`：注册并执行 Agent 工具。
 - `prompts.py`：系统提示词模板。
 - `knowledge_config.py` / `embedding_client.py` / `knowledge_store.py` / `knowledge_base.py`：可选儿童教育 RAG 知识库，使用 Ollama `bge-m3`、ChromaDB、BM25 和 query expansion。
 - `memory_config.py` / `memory.py`：可选 markdown 长期记忆，由 Agent 在 ReAct 主循环里按需调用工具保存。
-- `schema.py`：`ReactStep` 和 `AgentResult` 等内部结构。
+- `schema.py`：`ReactStep` 等内部结构。
 - `demo.py`：命令行入口。
 
 ## 当前工具
@@ -58,7 +58,7 @@ Agent 工具层测试位于 `tests/agent_tests/`，使用标准库 `unittest`：
 python -m unittest discover -s tests
 ```
 
-当前测试通过 `InMemoryEnvironmentAdapter` 验证工具查询、通用设备控制、新增设备控制和错误返回，并用假模型客户端验证控制器的直接回答、工具调用后回答、流式工具调用和异常兜底，不需要启动环境服务或模型服务。
+当前测试通过 `InMemoryEnvironmentAdapter` 验证工具查询、通用设备控制、新增设备控制和错误返回，并用假流式模型客户端验证控制器的直接回答、工具调用后回答、连续工具调用、空输出重试和异常兜底，不需要启动环境服务或模型服务。
 
 ## 模型配置
 
@@ -76,6 +76,8 @@ python -m unittest discover -s tests
 - `AGENT_MODEL_TIMEOUT_SECONDS`
 - `AGENT_MODEL_ENABLE_THINKING`
 - `AGENT_MODEL_THINKING_BUDGET`
+
+当 `AGENT_MODEL_ENABLE_THINKING=false` 时，客户端会同时发送 Ollama/OpenAI 兼容的 `think=false`、`enable_thinking=false`、`reasoning_effort=none` 和 `reasoning.effort=none`，尽量避免模型输出大段 reasoning。
 
 ## 运行方式
 
@@ -102,6 +104,22 @@ python agent/demo.py
 ```bash
 python agent/demo.py -v
 ```
+
+普通模式只流式展示最终 `Answer`，会隐藏 `Thought`、`Action`、工具 Observation 和模型调试片段。`-v/--verbose` 模式用于排查问题，会完整打印模型原始 `content` / `reasoning` 返回，并展示 `action_start`、`observation`、`final_reply` 等 Agent 事件；连续模型片段会聚合在同一段日志中，避免每个 token 单独换行。
+
+## 上下文管理
+
+控制器只把最终用户可见的 `Answer` 写入会话历史，不把 `Thought`、`Action` 或 `Observation` 带入下一轮请求。会话历史还会按消息数和字符数裁剪，避免复杂问题之后继续追问时上下文膨胀、响应变慢。
+
+默认配置：
+
+```text
+AGENT_MAX_HISTORY_MESSAGES=8
+AGENT_MAX_HISTORY_CHARS=6000
+AGENT_MAX_HISTORY_MESSAGE_CHARS=1200
+```
+
+如果更重视速度，可以调小这些值；如果更重视跨轮记忆，可以适当调大。默认 `AGENT_MODEL_MAX_TOKENS=1024`，用于限制单轮生成长度。长期稳定偏好应交给 markdown 长期记忆，而不是依赖短期会话历史。
 
 ## 依赖前提
 

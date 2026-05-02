@@ -5,6 +5,9 @@
 - 注释和文档优先使用中文；只在复杂逻辑前写有帮助的短注释，避免解释显而易见的代码。
 - 不写死绝对路径、API key、模型名或服务 URL；配置走环境变量，并提供本地默认值。
 - 运行 Python 时优先使用 `.\.venv\Scripts\python.exe`，测试优先跑 `compileall` 和 `unittest discover -s tests`。
+- Agent demo 默认走流式输出；普通模式只展示最终 `Answer`，verbose 模式可以展示完整事件流，但连续模型片段要聚合到同一日志区块，避免每个 token 单独换行。
+- 会话上下文只保留用户输入和最终用户可见 `Answer`；不要把 `Thought`、`Action`、`Observation` 带入下一轮请求。
+- 复杂问答后的响应速度优先通过上下文预算、单条历史截断和较小 `max_tokens` 控制；长期稳定信息交给 markdown 长期记忆，不依赖短期上下文无限增长。
 - Agent 测试不依赖真实模型、HTTP 服务、Ollama、Chroma 或联网；使用 FakeLLMClient、InMemoryEnvironmentAdapter、InMemoryKnowledgeStore 和临时 markdown memory 目录。
 - 儿童教育知识库和用户长期记忆要保持职责分离：知识库是 RAG tool，长期记忆是用户画像/约定的 markdown 文件。
 - 知识库默认关闭，默认 embedding 使用本地 Ollama `bge-m3`，默认 ChromaDB 相对路径是 `.agent_kb/chroma`。

@@ -25,7 +25,7 @@ class LLMConfig:
     min_p: float = 0.0
     presence_penalty: float = 0.0
     repetition_penalty: float = 1.0
-    max_tokens: int = 4096
+    max_tokens: int = 1024
     n: int = 1
     force_json_output: bool = False
     enable_thinking: bool | None = None
@@ -52,7 +52,7 @@ class LLMConfig:
             min_p=float(os.getenv("AGENT_MODEL_MIN_P", "0.0")),
             presence_penalty=float(os.getenv("AGENT_MODEL_PRESENCE_PENALTY", "0.0")),
             repetition_penalty=float(os.getenv("AGENT_MODEL_REPETITION_PENALTY", "1.0")),
-            max_tokens=int(os.getenv("AGENT_MODEL_MAX_TOKENS", "4096")),
+            max_tokens=int(os.getenv("AGENT_MODEL_MAX_TOKENS", "1024")),
             n=int(os.getenv("AGENT_MODEL_N", "1")),
             force_json_output=_parse_bool(os.getenv("AGENT_MODEL_FORCE_JSON_OUTPUT", "false")) or False,
             enable_thinking=_parse_optional_bool(os.getenv("AGENT_MODEL_ENABLE_THINKING")),

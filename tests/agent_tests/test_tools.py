@@ -143,6 +143,25 @@ class ToolRegistryTests(unittest.TestCase):
         self.assertIn("已清空", clear_result)
         self.assertEqual(tools.execute("memory-tool-session", "list_memories", {}), "当前没有长期记忆。")
 
+    def test_no_argument_tools_ignore_extra_model_arguments(self) -> None:
+        memory = AgentMemory(config=MemoryConfig(memory_dir=".tmp_tool_memory"))
+        adapter = InMemoryEnvironmentAdapter(env=SmartHomeEnv())
+        tools = ToolRegistry(adapter=adapter, memory=memory)
+
+        list_result = tools.execute(
+            "memory-tool-session",
+            "list_memories",
+            {"memory_type": "None", "memory_text": "None"},
+        )
+        clear_result = tools.execute(
+            "memory-tool-session",
+            "clear_user_memory",
+            {"memory_type": "None"},
+        )
+
+        self.assertEqual(list_result, "当前没有长期记忆。")
+        self.assertEqual(clear_result, "已清空当前用户的长期记忆。")
+
     def test_save_memory_tool_writes_markdown_memory(self) -> None:
         memory = AgentMemory(config=MemoryConfig(memory_dir=".tmp_tool_memory"))
         adapter = InMemoryEnvironmentAdapter(env=SmartHomeEnv())

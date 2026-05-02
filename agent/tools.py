@@ -34,6 +34,7 @@ class ToolRegistry:
     memory: Any | None = None
     knowledge_base: Any | None = None
     _tools: dict[str, Callable[..., str]] = field(default_factory=dict, init=False)
+    _tool_parameters: dict[str, set[str]] = field(default_factory=dict, init=False)
     _definitions: list[ToolDefinition] = field(default_factory=list, init=False)
     _memory_tools_registered: bool = field(default=False, init=False)
     _knowledge_tools_registered: bool = field(default=False, init=False)
@@ -70,7 +71,11 @@ class ToolRegistry:
             return f"错误：不存在名为 `{tool_name}` 的工具。可用工具：{available_tools}"
 
         try:
-            return handler(session_id, **args)
+            accepted_args = self._tool_parameters.get(tool_name)
+            filtered_args = args
+            if accepted_args is not None:
+                filtered_args = {key: value for key, value in args.items() if key in accepted_args}
+            return handler(session_id, **filtered_args)
         except TypeError as exc:
             return f"工具 `{tool_name}` 参数不合法：{exc}"
         except Exception as exc:
@@ -172,6 +177,7 @@ class ToolRegistry:
         """注册单个工具。"""
 
         self._tools[name] = handler
+        self._tool_parameters[name] = set(parameters)
         self._definitions.append(ToolDefinition(name=name, description=description, parameters=parameters))
 
     def _tool_query_all_devices(self, session_id: str) -> str:

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 from collections.abc import Iterator
 from dataclasses import dataclass, field
 from typing import TypeAlias
@@ -15,7 +16,7 @@ from agent.memory import AgentMemory, create_default_agent_memory
 from agent.memory_config import MemoryConfig
 from agent.parser import parse_react_output
 from agent.prompts import build_system_prompt, build_user_prompt
-from agent.schema import AgentResult, ReactStep
+from agent.schema import ReactStep
 from agent.tools import ToolRegistry
 
 Message: TypeAlias = dict[str, str]
@@ -23,8 +24,11 @@ StreamEvent: TypeAlias = dict[str, str]
 logger = logging.getLogger(__name__)
 
 MAX_REACT_STEPS = 8
-MAX_HISTORY_TURNS = 20
+MAX_HISTORY_MESSAGES = 8
+MAX_HISTORY_CHARS = 6000
+MAX_HISTORY_MESSAGE_CHARS = 1200
 CONTINUE_PROMPT = "请继续，并给出 Action 或 Answer。"
+EMPTY_OUTPUT_CONTINUE_PROMPT = "上一轮没有给出有效内容。请严格按格式继续，并给出一个 Action 或非空 Answer。"
 FALLBACK_REPLY = "抱歉，我在处理这个请求时遇到了一些问题。请稍后再试，或换一种说法。"
 
 
@@ -70,63 +74,6 @@ class SimpleSmartHomeAgent:
         self.tools.adapter.create_session(normalized_session_id)
         self._session_histories[normalized_session_id] = []
 
-    def handle_user_input(self, session_id: str, user_input: str) -> AgentResult:
-        """以非流式方式处理单次用户输入。"""
-
-        normalized_session_id = self._validate_session_id(session_id)
-        normalized_user_input = self._validate_user_input(user_input)
-        history, all_messages = self._prepare_conversation(
-            normalized_session_id,
-            normalized_user_input,
-        )
-
-        steps: list[ReactStep] = []
-        for _ in range(MAX_REACT_STEPS):
-            try:
-                raw_output = self.client.chat_completion(all_messages)
-            except Exception:
-                return self._build_fallback_result(
-                    session_id=normalized_session_id,
-                    user_input=normalized_user_input,
-                    history=history,
-                    steps=steps,
-                    raw_messages=all_messages,
-                )
-
-            parsed_step = parse_react_output(raw_output)
-            steps.append(parsed_step)
-
-            if parsed_step.type == "answer":
-                self._store_assistant_message(history, raw_output)
-                self._trim_history(normalized_session_id)
-                return AgentResult(
-                    session_id=normalized_session_id,
-                    user_input=normalized_user_input,
-                    reply=parsed_step.content,
-                    steps=steps,
-                    raw_messages=list(all_messages) + [{"role": "assistant", "content": raw_output}],
-                )
-
-            if parsed_step.type == "action" and parsed_step.tool_name:
-                self._execute_action_step(
-                    session_id=normalized_session_id,
-                    parsed_step=parsed_step,
-                    all_messages=all_messages,
-                    steps=steps,
-                    raw_output=raw_output,
-                )
-                continue
-
-            self._continue_reasoning(all_messages, raw_output)
-
-        return self._build_fallback_result(
-            session_id=normalized_session_id,
-            user_input=normalized_user_input,
-            history=history,
-            steps=steps,
-            raw_messages=all_messages,
-        )
-
     def handle_user_input_stream(
         self,
         session_id: str,
@@ -156,8 +103,8 @@ class SimpleSmartHomeAgent:
                 break
 
             parsed_step = parse_react_output(raw_output)
-            if parsed_step.type == "answer":
-                self._store_assistant_message(history, raw_output)
+            if self._is_valid_answer(parsed_step):
+                self._store_assistant_message(history, parsed_step.content)
                 self._trim_history(normalized_session_id)
                 yield {"type": "final_reply", "content": parsed_step.content}
                 return
@@ -176,7 +123,11 @@ class SimpleSmartHomeAgent:
                 self._append_action_messages(all_messages, raw_output, observation)
                 continue
 
-            self._continue_reasoning(all_messages, raw_output)
+            self._continue_reasoning(
+                all_messages,
+                raw_output,
+                prompt=_continue_prompt_for(parsed_step),
+            )
 
         self._store_assistant_message(history, FALLBACK_REPLY)
         self._trim_history(normalized_session_id)
@@ -214,27 +165,6 @@ class SimpleSmartHomeAgent:
             logger.debug("长期记忆检索失败，已忽略：%s", exc)
             return ""
 
-    def _execute_action_step(
-        self,
-        session_id: str,
-        parsed_step: ReactStep,
-        all_messages: list[Message],
-        steps: list[ReactStep],
-        raw_output: str,
-    ) -> None:
-        """执行动作步骤并写回 Observation。"""
-
-        if not parsed_step.tool_name:
-            return
-
-        observation = self.tools.execute(
-            session_id=session_id,
-            tool_name=parsed_step.tool_name,
-            args=parsed_step.tool_args or {},
-        )
-        steps.append(ReactStep(type="observation", content=observation))
-        self._append_action_messages(all_messages, raw_output, observation)
-
     @staticmethod
     def _append_action_messages(
         all_messages: list[Message],
@@ -247,11 +177,23 @@ class SimpleSmartHomeAgent:
         all_messages.append({"role": "user", "content": f"Observation: {observation}"})
 
     @staticmethod
-    def _continue_reasoning(all_messages: list[Message], raw_output: str) -> None:
+    def _continue_reasoning(
+        all_messages: list[Message],
+        raw_output: str,
+        *,
+        prompt: str = CONTINUE_PROMPT,
+    ) -> None:
         """要求模型继续补全动作或最终回答。"""
 
-        all_messages.append({"role": "assistant", "content": raw_output})
-        all_messages.append({"role": "user", "content": CONTINUE_PROMPT})
+        if raw_output.strip():
+            all_messages.append({"role": "assistant", "content": raw_output})
+        all_messages.append({"role": "user", "content": prompt})
+
+    @staticmethod
+    def _is_valid_answer(step: ReactStep) -> bool:
+        """判断模型是否给出了可展示给用户的最终回答。"""
+
+        return step.type == "answer" and bool(step.content.strip())
 
     @staticmethod
     def _store_assistant_message(history: list[Message], content: str) -> None:
@@ -259,38 +201,44 @@ class SimpleSmartHomeAgent:
 
         history.append({"role": "assistant", "content": content})
 
-    def _build_fallback_result(
-        self,
-        session_id: str,
-        user_input: str,
-        history: list[Message],
-        steps: list[ReactStep],
-        raw_messages: list[Message],
-    ) -> AgentResult:
-        """构造统一的兜底返回。"""
-
-        self._store_assistant_message(history, FALLBACK_REPLY)
-        self._trim_history(session_id)
-        return AgentResult(
-            session_id=session_id,
-            user_input=user_input,
-            reply=FALLBACK_REPLY,
-            steps=steps,
-            raw_messages=list(raw_messages) + [{"role": "assistant", "content": FALLBACK_REPLY}],
-        )
-
     def _ensure_session(self, session_id: str) -> None:
         """按需初始化会话。"""
 
         if session_id not in self._session_histories:
             self.create_session(session_id)
 
-    def _trim_history(self, session_id: str, max_turns: int = MAX_HISTORY_TURNS) -> None:
+    def _trim_history(
+        self,
+        session_id: str,
+        max_messages: int | None = None,
+        max_chars: int | None = None,
+    ) -> None:
         """裁剪会话历史，避免上下文无限增长。"""
 
         history = self._session_histories.get(session_id)
-        if history and len(history) > max_turns:
-            self._session_histories[session_id] = history[-max_turns:]
+        if not history:
+            return
+
+        resolved_max_messages = max_messages or _get_positive_int_env(
+            "AGENT_MAX_HISTORY_MESSAGES",
+            MAX_HISTORY_MESSAGES,
+        )
+        resolved_max_chars = max_chars or _get_positive_int_env(
+            "AGENT_MAX_HISTORY_CHARS",
+            MAX_HISTORY_CHARS,
+        )
+        resolved_max_message_chars = _get_positive_int_env(
+            "AGENT_MAX_HISTORY_MESSAGE_CHARS",
+            MAX_HISTORY_MESSAGE_CHARS,
+        )
+
+        trimmed_history = [
+            _compact_history_message(message, resolved_max_message_chars)
+            for message in history[-resolved_max_messages:]
+        ]
+        while len(trimmed_history) > 1 and _messages_chars(trimmed_history) > resolved_max_chars:
+            trimmed_history = trimmed_history[1:]
+        self._session_histories[session_id] = trimmed_history
 
     @staticmethod
     def _validate_session_id(session_id: str) -> str:
@@ -309,3 +257,42 @@ class SimpleSmartHomeAgent:
         if not normalized_user_input:
             raise ValueError("user_input 不能为空。")
         return normalized_user_input
+
+
+def _continue_prompt_for(step: ReactStep) -> str:
+    """根据解析结果选择继续提示。"""
+
+    if step.type == "empty":
+        return EMPTY_OUTPUT_CONTINUE_PROMPT
+    return CONTINUE_PROMPT
+
+
+def _messages_chars(messages: list[Message]) -> int:
+    """粗略计算历史消息字符数，用于控制上下文长度。"""
+
+    return sum(len(message.get("content", "")) for message in messages)
+
+
+def _compact_history_message(message: Message, max_chars: int) -> Message:
+    """裁剪单条历史消息，避免长回答拖慢后续轮次。"""
+
+    content = message.get("content", "")
+    if len(content) <= max_chars:
+        return dict(message)
+
+    marker = "\n[历史消息过长，已截断]"
+    keep_chars = max(1, max_chars - len(marker))
+    return {
+        **message,
+        "content": content[:keep_chars].rstrip() + marker,
+    }
+
+
+def _get_positive_int_env(name: str, default: int) -> int:
+    """读取正整数环境变量。"""
+
+    try:
+        value = int(os.getenv(name, str(default)))
+    except ValueError:
+        return default
+    return value if value > 0 else default

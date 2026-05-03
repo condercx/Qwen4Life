@@ -14,3 +14,4 @@ class ReactStep:
     content: str
     tool_name: str | None = None
     tool_args: dict[str, Any] | None = None
+    raw_action_text: str | None = None

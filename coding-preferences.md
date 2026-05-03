@@ -6,6 +6,7 @@
 - 不写死绝对路径、API key、模型名或服务 URL；配置走环境变量，并提供本地默认值。
 - 运行 Python 时优先使用 `.\.venv\Scripts\python.exe`，测试优先跑 `compileall` 和 `unittest discover -s tests`。
 - Agent demo 默认走流式输出；普通模式只展示最终 `Answer`，verbose 模式可以展示完整事件流，但连续模型片段要聚合到同一日志区块，避免每个 token 单独换行。
+- 浏览器展示优先使用轻量 FastAPI 网关 + 静态前端；前端只连接网关，不直接跨端口调用环境服务或 Python 内部类。
 - 会话上下文只保留用户输入和最终用户可见 `Answer`；不要把 `Thought`、`Action`、`Observation` 带入下一轮请求。
 - 复杂问答后的响应速度优先通过上下文预算、单条历史截断和较小 `max_tokens` 控制；长期稳定信息交给 markdown 长期记忆，不依赖短期上下文无限增长。
 - Agent 测试不依赖真实模型、HTTP 服务、Ollama、Chroma 或联网；使用 FakeLLMClient、InMemoryEnvironmentAdapter、InMemoryKnowledgeStore 和临时 markdown memory 目录。

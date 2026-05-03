@@ -120,7 +120,7 @@ class SimpleSmartHomeAgent:
                     args=parsed_step.tool_args or {},
                 )
                 yield {"type": "observation", "content": f"[工具返回: {observation}]\n"}
-                self._append_action_messages(all_messages, raw_output, observation)
+                self._append_action_messages(all_messages, _action_message_for(parsed_step, raw_output), observation)
                 continue
 
             self._continue_reasoning(
@@ -265,6 +265,16 @@ def _continue_prompt_for(step: ReactStep) -> str:
     if step.type == "empty":
         return EMPTY_OUTPUT_CONTINUE_PROMPT
     return CONTINUE_PROMPT
+
+
+def _action_message_for(step: ReactStep, raw_output: str) -> str:
+    """只把已执行的单个 Action 写回上下文，避免多 Action 输出污染下一轮。"""
+
+    if step.raw_action_text:
+        if step.content.strip():
+            return f"Thought: {step.content.strip()}\n{step.raw_action_text}"
+        return step.raw_action_text
+    return raw_output
 
 
 def _messages_chars(messages: list[Message]) -> int:

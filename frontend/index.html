@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Qwen4Life Agent Demo</title>
+    <link rel="stylesheet" href="/assets/styles.css?v=20260503g" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="topbar">
+        <div>
+          <h1>Qwen4Life 端侧 Agent 演示</h1>
+          <p id="statusText">正在初始化会话</p>
+        </div>
+        <div class="session-panel">
+          <label for="sessionId">Session</label>
+          <input id="sessionId" autocomplete="off" />
+          <button id="resetBtn" type="button">重置</button>
+        </div>
+      </header>
+
+      <main class="workspace">
+        <section class="environment-pane" aria-label="智能家居环境">
+          <div class="section-heading">
+            <h2>家庭环境</h2>
+            <div class="metrics">
+              <span id="observedAt">--</span>
+              <span id="deviceCount">0 台设备</span>
+            </div>
+          </div>
+
+          <div id="homeStage" class="home-stage">
+            <div class="room room-living">
+              <div class="room-title">客厅</div>
+              <div id="lightBeam" class="light-beam"></div>
+              <div class="floor-lamp"><span></span></div>
+              <div class="sofa"></div>
+              <div class="coffee-table"></div>
+              <div class="rug"></div>
+              <div id="curtainViz" class="curtain-viz">
+                <span></span>
+                <span></span>
+              </div>
+              <div id="acViz" class="ac-viz">
+                <b></b>
+                <i></i>
+                <i></i>
+                <i></i>
+              </div>
+              <div id="sensorViz" class="sensor-viz">
+                <strong id="sensorTemp">--°</strong>
+                <small id="sensorHumidity">--%</small>
+              </div>
+            </div>
+
+            <div class="room room-balcony">
+              <div class="room-title">阳台</div>
+              <div class="plant plant-a"></div>
+              <div class="plant plant-b"></div>
+              <div id="washerViz" class="washer-viz">
+                <span></span>
+              </div>
+              <div id="washerStatus" class="device-caption">空闲</div>
+            </div>
+
+            <div class="room room-study">
+              <div class="room-title">书房</div>
+              <div class="desk"></div>
+              <div class="monitor"></div>
+              <div id="plugViz" class="plug-viz">
+                <span></span>
+              </div>
+              <div id="plugPower" class="device-caption">0 W</div>
+            </div>
+          </div>
+
+          <div id="deviceGrid" class="device-grid"></div>
+        </section>
+
+        <aside class="chat-pane" aria-label="Agent 对话">
+          <div class="section-heading">
+            <h2>Agent 对话</h2>
+            <label class="debug-toggle">
+              <input id="debugToggle" type="checkbox" />
+              <span>调试</span>
+            </label>
+          </div>
+
+          <div class="agent-strengths" aria-label="Agent 能力">
+            <span>实时控家</span>
+            <span>童话知识库</span>
+            <span>长期记忆</span>
+            <span>环境反馈</span>
+          </div>
+
+          <div id="chatLog" class="chat-log"></div>
+
+          <form id="chatForm" class="chat-form">
+            <textarea
+              id="messageInput"
+              rows="3"
+              placeholder="例如：打开客厅灯，把窗帘关上"
+            ></textarea>
+            <button id="sendBtn" type="submit">发送</button>
+          </form>
+
+          <div class="quick-prompts">
+            <button type="button" data-prompt="打开客厅灯，把窗帘关上，空调调到 24 度">回家模式</button>
+            <button type="button" data-prompt="现在家里设备都是什么状态？">查状态</button>
+            <button type="button" data-prompt="给孩子讲一个适合睡前听的灰姑娘睡前故事，语气温柔、贴近日常生活，可以参考家里的灯光和窗帘状态营造睡前氛围，最后讲一句小寓意">儿童陪伴</button>
+            <button type="button" data-prompt="以后小太阳就是客厅主灯">记住别名</button>
+          </div>
+        </aside>
+
+        <section class="timeline-pane" aria-label="环境事件">
+          <div class="section-heading">
+            <h2>事件时间线</h2>
+            <button id="clearEventsBtn" type="button">清空</button>
+          </div>
+          <ol id="eventList" class="event-list"></ol>
+        </section>
+      </main>
+    </div>
+
+    <script src="/assets/app.js?v=20260503g" defer></script>
+  </body>
+</html>

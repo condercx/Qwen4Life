@@ -21,6 +21,7 @@
 - `memory_config.py` / `memory.py`：可选 markdown 长期记忆，由 Agent 在 ReAct 主循环里按需调用工具保存。
 - `schema.py`：`ReactStep` 等内部结构。
 - `demo.py`：命令行入口。
+- `server.py`：浏览器展示网关，负责提供静态前端、Agent SSE 流式对话、环境状态代理和手动设备控制接口。
 
 ## 当前工具
 
@@ -106,6 +107,23 @@ python agent/demo.py -v
 ```
 
 普通模式只流式展示最终 `Answer`，会隐藏 `Thought`、`Action`、工具 Observation 和模型调试片段。`-v/--verbose` 模式用于排查问题，会完整打印模型原始 `content` / `reasoning` 返回，并展示 `action_start`、`observation`、`final_reply` 等 Agent 事件；连续模型片段会聚合在同一段日志中，避免每个 token 单独换行。
+
+浏览器展示：
+
+```bash
+python -m environment.server
+python -m agent.server
+```
+
+默认访问 `http://127.0.0.1:7860`。展示网关会把 Agent 流式事件转成 SSE，同时代理环境状态和事件；前端左侧使用 Image Gen 生成的家居主视觉展示智能家居环境动画，右侧展示 Agent 对话和“思考中”等待动效，底部展示环境事件时间线。儿童陪伴快捷入口默认请求睡前灰姑娘故事，用来展示本地童话知识库、实时环境状态和端侧 Agent 编排能力。
+
+主要接口：
+
+- `POST /api/session/{session_id}/reset`
+- `GET /api/session/{session_id}/state`
+- `GET /api/session/{session_id}/events`
+- `POST /api/session/{session_id}/action`
+- `POST /api/agent/{session_id}/chat/stream`
 
 ## 上下文管理
 

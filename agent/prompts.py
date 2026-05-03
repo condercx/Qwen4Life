@@ -43,6 +43,7 @@ Answer: 你的自然语言回复
 ## 约束
 
 - 每次输出只能包含一个 Action 或一个 Answer，不能同时出现。
+- 严禁在同一次模型输出里写多个 Action。多设备任务必须一次只输出一个 Action，等收到 Observation 后再继续输出下一个 Action。
 - Action 参数使用关键字格式，字符串值使用双引号。
 - 字典参数使用 JSON 格式，例如 params={{"temperature": 24}}。
 - 不要在最终回复里暴露内部工具细节。

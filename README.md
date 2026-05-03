@@ -16,6 +16,7 @@ Qwen4Life 是一个面向智能家居场景的最小可运行 Agent + Environmen
 - 支持洗衣机这类带时间推进的设备任务。
 - 提供独立的 FastAPI 环境服务，Agent 通过 HTTP 调用环境。
 - 提供命令行 Agent demo，单轮和交互模式都使用流式输出。
+- 提供浏览器展示前端：左侧为智能家居数字孪生环境，右侧为 Agent 流式对话窗口。
 - 环境核心支持内存适配器和可控时间，便于编写不依赖服务进程的单元测试。
 - 支持可选儿童教育 RAG 知识库，当前示例语料为 Project Gutenberg 的《格林童话》。
 - 支持可选 markdown 长期记忆，由 Agent 自己判断是否记录用户偏好、别名、习惯、家庭规则和历史约定。
@@ -53,6 +54,11 @@ Qwen4Life
 ├── data
 │   └── knowledge
 │       └── grimms_fairy_tales.txt
+├── frontend
+│   ├── index.html
+│   └── assets
+│       ├── app.js
+│       └── styles.css
 ├── tests
 │   ├── agent_tests
 │   ├── environment_tests
@@ -85,6 +91,13 @@ Qwen4Life
 - `memory_config.py` / `memory.py`：可选 markdown 长期记忆配置和 AgentMemory 门面。
 - `prompts.py`：系统提示词模板。
 - `demo.py`：Agent 命令行入口。
+- `server.py`：浏览器展示网关，提供静态前端、Agent SSE 流式对话和环境状态代理。
+
+### `frontend/`
+
+- `index.html`：端侧 Agent 展示页面。
+- `assets/app.js`：浏览器端状态同步、SSE 对话流、设备控制和动画驱动。
+- `assets/styles.css`：智能家居数字孪生界面、设备卡片、聊天窗口和事件时间线样式。
 
 ### `tests/`
 
@@ -187,6 +200,35 @@ AGENT_MAX_HISTORY_MESSAGE_CHARS=1200
 ```bash
 python agent/demo.py "帮我打开客厅灯"
 ```
+
+### 5. 启动浏览器展示前端
+
+先启动环境服务和 Ollama 模型服务，然后启动 Agent 展示网关：
+
+```bash
+python -m environment.server
+python -m agent.server
+```
+
+默认浏览器入口：
+
+- `http://127.0.0.1:7860`
+
+展示前端包含：
+
+- 智能家居环境视图：使用 Image Gen 生成的家居主视觉作为数字孪生背景，灯光、空调、窗帘、洗衣机、温湿度传感器和插座会随状态变化显示动画。
+- Agent 对话窗口：普通模式展示最终回答，并在等待模型或工具结果时显示“思考中”动效；调试模式展示 `content`、`action_start`、`observation`、`final_reply` 等流式事件。
+- 事件时间线：展示环境服务产生的设备状态变化事件。
+- 手动设备控制：用于对比直接控制和自然语言 Agent 控制。
+- 儿童陪伴快捷入口：默认请求睡前灰姑娘故事，可结合本地童话知识库和实时家居状态生成更贴近日常生活的陪伴内容。
+
+网关接口：
+
+- `POST /api/session/{session_id}/reset`
+- `GET /api/session/{session_id}/state`
+- `GET /api/session/{session_id}/events`
+- `POST /api/session/{session_id}/action`
+- `POST /api/agent/{session_id}/chat/stream`
 
 ## 环境 HTTP 接口
 

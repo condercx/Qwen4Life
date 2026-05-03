@@ -158,6 +158,39 @@ class SimpleSmartHomeAgentTests(unittest.TestCase):
         self.assertEqual(state["devices"]["living_room_light_1"]["brightness"], 70)
         self.assertIn("Observation:", client.calls[1][-1]["content"])
 
+    def test_model_multiple_actions_executes_only_first_action_cleanly(self) -> None:
+        env = SmartHomeEnv()
+        client = FakeStreamingLLMClient(
+            [
+                [
+                    {
+                        "type": "content",
+                        "content": (
+                            "Thought: 用户要求多个设备控制，需要逐个执行。\n"
+                            'Action: control_device(device_id="living_room_light_1", command="turn_on")\n'
+                            'Action: control_device(device_id="living_room_curtain_1", command="close")\n'
+                            'Action: control_device(device_id="living_room_ac_1", command="set_temperature", '
+                            'params={"temperature": 24})'
+                        ),
+                    }
+                ],
+                [{"type": "content", "content": "Thought: 第一项完成\nAnswer: 已先打开客厅灯。"}],
+            ]
+        )
+        agent = build_agent(client, env=env)
+
+        events = collect_events(agent, "打开客厅灯，把窗帘关上，空调调到 24 度")
+        state = env.get_state("agent-session")
+
+        self.assertEqual(events[-1], {"type": "final_reply", "content": "已先打开客厅灯。"})
+        self.assertEqual([event["type"] for event in events].count("observation"), 1)
+        self.assertTrue(state["devices"]["living_room_light_1"]["is_on"])
+        self.assertEqual(state["devices"]["living_room_curtain_1"]["position_percent"], 0)
+        self.assertEqual(state["devices"]["living_room_ac_1"]["target_temperature"], 26.0)
+        self.assertIn('command="turn_on"', client.calls[1][-2]["content"])
+        self.assertNotIn("living_room_curtain_1", client.calls[1][-2]["content"])
+        self.assertNotIn("set_temperature", client.calls[1][-2]["content"])
+
     def test_history_stores_final_answer_without_react_thought(self) -> None:
         client = FakeStreamingLLMClient(
             [

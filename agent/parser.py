@@ -8,12 +8,9 @@ from typing import Any
 
 from agent.schema import ReactStep
 
-ACTION_PATTERN = re.compile(
-    r"""["']?Action["']?\s*:\s*["']?([a-zA-Z0-9_]+)\((.*)\)["']?""",
-    re.DOTALL,
-)
 ANSWER_PATTERN = re.compile(r"""["']?Answer["']?\s*:\s*["']?(.*)""", re.DOTALL)
 THOUGHT_PATTERN = re.compile(r"""["']?Thought["']?\s*:\s*(.*)""", re.DOTALL)
+ACTION_HEAD_PATTERN = re.compile(r"""["']?Action["']?\s*:\s*["']?([a-zA-Z0-9_]+)\(""")
 
 
 def parse_react_output(raw_text: str) -> ReactStep:
@@ -23,16 +20,16 @@ def parse_react_output(raw_text: str) -> ReactStep:
     if not text:
         return ReactStep(type="empty", content="")
 
-    action_match = ACTION_PATTERN.search(text)
-    if action_match:
-        tool_name = action_match.group(1).strip()
-        args_text = _normalize_args_text(action_match.group(2))
-        thought_text = _extract_thought_prefix(text[: action_match.start()])
+    action_call = _extract_first_action_call(text)
+    if action_call is not None:
+        tool_name, args_text, start_index, end_index = action_call
+        thought_text = _extract_thought_prefix(text[:start_index])
         return ReactStep(
             type="action",
             content=thought_text,
             tool_name=tool_name,
             tool_args=_parse_tool_args(args_text),
+            raw_action_text=text[start_index:end_index].strip(),
         )
 
     answer_match = ANSWER_PATTERN.search(text)
@@ -66,6 +63,54 @@ def _normalize_args_text(args_text: str) -> str:
     """清理工具参数文本。"""
 
     return args_text.strip().replace('\\"', '"')
+
+
+def _extract_first_action_call(text: str) -> tuple[str, str, int, int] | None:
+    """提取第一个完整 Action 调用，忽略模型误输出的后续 Action。"""
+
+    action_match = ACTION_HEAD_PATTERN.search(text)
+    if action_match is None:
+        return None
+
+    args_start = action_match.end()
+    args_end = _find_matching_paren(text, args_start)
+    if args_end is None:
+        return None
+
+    tool_name = action_match.group(1).strip()
+    args_text = _normalize_args_text(text[args_start:args_end])
+    return tool_name, args_text, action_match.start(), args_end + 1
+
+
+def _find_matching_paren(text: str, start_index: int) -> int | None:
+    """从参数起点开始寻找第一个 Action 调用的闭合括号。"""
+
+    quote: str | None = None
+    escape_next = False
+    depth = 1
+    for index in range(start_index, len(text)):
+        char = text[index]
+        if escape_next:
+            escape_next = False
+            continue
+        if char == "\\":
+            escape_next = True
+            continue
+        if quote:
+            if char == quote:
+                quote = None
+            continue
+        if char in {'"', "'"}:
+            quote = char
+            continue
+        if char == "(":
+            depth += 1
+            continue
+        if char == ")":
+            depth -= 1
+            if depth == 0:
+                return index
+    return None
 
 
 def _parse_tool_args(args_text: str) -> dict[str, Any]:
